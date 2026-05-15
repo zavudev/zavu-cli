@@ -43,8 +43,11 @@ WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
 echo "[tap] Downloading SHA256SUMS from $TAG..."
-if ! curl -fsSL -o "$WORK/SHA256SUMS" "$RELEASE_BASE/SHA256SUMS"; then
-  echo "Could not download $RELEASE_BASE/SHA256SUMS. Did release.sh finish?" >&2
+# Use `gh release download` instead of curl. The public CDN (github.com/.../releases/download/...)
+# occasionally returns 503/504 for fresh assets while the GH API mirror serves them fine.
+# gh also handles auth transparently for private release repos.
+if ! gh release download "$TAG" -R "$RELEASE_REPO" -p SHA256SUMS -O "$WORK/SHA256SUMS" --clobber 2>&1; then
+  echo "Could not download SHA256SUMS from $TAG. Did release.sh finish?" >&2
   exit 1
 fi
 
