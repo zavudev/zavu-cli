@@ -19,6 +19,10 @@
 //     surface stays in lockstep with apps/docs/openapi.json.
 
 import { Command } from "commander"
+// Version is sourced from package.json so it stays in sync with each release
+// without anyone having to remember to bump a string here. Bun's --compile
+// inlines this JSON into the standalone binary at build time.
+import pkg from "../package.json" with { type: "json" }
 import { loginCommand } from "./commands/login"
 import { whoamiCommand, logoutCommand } from "./commands/account"
 import { functionsCommand } from "./commands/functions"
@@ -54,7 +58,7 @@ const program = new Command()
   .description(
     "Zavu CLI — deploy Functions, send messages, and manage every resource exposed by the public API."
   )
-  .version("0.1.0")
+  .version(pkg.version)
   .showHelpAfterError()
 
 // Auth + Functions dev workflow. The `functions` group keeps the full set
