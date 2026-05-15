@@ -280,6 +280,37 @@ export function agentsCommand(): Command {
       }
     })
 
+  // Reset the agent's conversation context for one contact. Common dev loop:
+  //   1. edit code
+  //   2. zavu deploy
+  //   3. zavu agents reset-thread --sender X --contact +1415...
+  //   4. send a test message — agent starts fresh, no leftover context
+  cmd
+    .command("reset-thread")
+    .description("Close the active conversation thread + flow sessions for one contact so the agent starts fresh on the next inbound.")
+    .requiredOption("--sender <senderId>", "Sender ID")
+    .option("--contact <identifier>", "Phone (E.164), email, or 'telegram:<chatId>'")
+    .option("--contact-id <id>", "Contact ID (skip identifier lookup)")
+    .action(async (opts) => {
+      const api = await buildApi()
+      if (!opts.contact && !opts.contactId) {
+        fail("Pass --contact <phone|email|telegram:id> or --contact-id <id>")
+      }
+      try {
+        const res = await api.post<{ threadsClosed: number; sessionsClosed: number }>(
+          `${agentBase(opts.sender)}/threads/reset`,
+          opts.contactId
+            ? { contactId: opts.contactId }
+            : { contactIdentifier: opts.contact }
+        )
+        ui.success(
+          `Closed ${res.threadsClosed} thread${res.threadsClosed === 1 ? "" : "s"} and ${res.sessionsClosed} session${res.sessionsClosed === 1 ? "" : "s"}. Next inbound starts fresh.`
+        )
+      } catch (err) {
+        fail(err instanceof Error ? err.message : String(err))
+      }
+    })
+
   // Sub-resources: flows, tools, knowledge-bases. Tools have a dedicated
   // flag-friendly subgroup because its `parameters` field is a nested JSON
   // schema — using --file is unavoidable for that part, but the rest
