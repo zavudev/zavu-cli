@@ -133,13 +133,18 @@ export function functionsInitCommand(): Command {
         for (const s of template.requiredSecrets) {
           ui.hint(`${s.key}  — ${s.hint}`)
         }
-        ui.hint("Set them with `zavu secrets set <KEY> <value>` once implemented, or via the dashboard.")
+        ui.hint("Set them with `zavu fn secrets set <KEY> <value>` or via the dashboard.")
       }
 
       ui.info("\nNext steps:")
       ui.hint(`cd ${basename(targetDir)}`)
+      if (template.requiredSecrets.length > 0) {
+        for (const s of template.requiredSecrets) {
+          ui.hint(`zavu fn secrets set ${s.key} <value>`)
+        }
+      }
       ui.hint("# edit index.ts")
-      ui.hint("zavu functions deploy")
+      ui.hint("zavu deploy")
     })
 }
 
