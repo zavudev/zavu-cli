@@ -21,8 +21,12 @@ export function functionsDeployCommand(): Command {
       "--update-runtime",
       "Bump this function to the latest runtime layer. Default: keep pinned to the runtime it last deployed against."
     )
+    .option(
+      "--arch <arch>",
+      "CPU architecture: arm64 (default, cheapest) or x86_64 (+25% cost, broader native-module compat)."
+    )
     .option("--watch", "(future) keep running and redeploy on file changes")
-    .action(async (opts: { source: string; watch?: boolean; updateRuntime?: boolean }) => {
+    .action(async (opts: { source: string; watch?: boolean; updateRuntime?: boolean; arch?: string }) => {
       if (opts.watch) {
         fail("--watch is not implemented yet. Use `zavu functions invoke` for local iteration.")
       }
@@ -39,15 +43,32 @@ export function functionsDeployCommand(): Command {
         fail(`Could not read ${opts.source}. Pass --source <file> if your entrypoint is named differently.`)
       }
 
-      // Read declared dependencies from package.json (if present). The server's
-      // Build Worker installs these and bundles them in.
+      // Read declared dependencies + the optional `zavu` config block from
+      // package.json. The server's Build Worker installs the deps; the `zavu`
+      // block lets users pin architecture etc. directly in source control.
       let dependencies: Record<string, string> = {}
+      let pkgArch: string | undefined
       try {
         const pkgRaw = await readFile(join(process.cwd(), "package.json"), "utf8")
-        const pkg = JSON.parse(pkgRaw) as { dependencies?: Record<string, string> }
+        const pkg = JSON.parse(pkgRaw) as {
+          dependencies?: Record<string, string>
+          zavu?: { architecture?: string }
+        }
         dependencies = pkg.dependencies ?? {}
+        pkgArch = pkg.zavu?.architecture
       } catch {
         // No package.json — fine for templates with zero deps.
+      }
+
+      // Architecture precedence: CLI flag > package.json > server default (arm64).
+      // Validate so we surface bad input before the deploy round-trip.
+      const archInput = opts.arch ?? pkgArch
+      let architecture: "arm64" | "x86_64" | undefined
+      if (archInput !== undefined) {
+        if (archInput !== "arm64" && archInput !== "x86_64") {
+          fail(`Invalid --arch "${archInput}". Use "arm64" (default) or "x86_64".`)
+        }
+        architecture = archInput
       }
 
       ui.step(`Deploying ${config!.name} (${config!.slug})…`)
@@ -64,6 +85,7 @@ export function functionsDeployCommand(): Command {
           body: JSON.stringify({
             sourceCode,
             dependencies,
+            ...(architecture ? { architecture } : {}),
             ...(opts.updateRuntime ? { updateRuntime: true } : {}),
           }),
         }
