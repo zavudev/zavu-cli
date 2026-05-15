@@ -1,0 +1,172 @@
+// `zavu functions deploy` — read the local index.ts + package.json, push them
+// to Zavu's deploy pipeline, stream status until active.
+//
+// The actual bundling (esbuild + npm install) happens server-side in the
+// Build Worker Lambda — the CLI just sends source + declared deps. This
+// keeps the CLI's compiled binary tiny (no esbuild bundled) and means
+// deploys are reproducible regardless of the dev's local environment.
+
+import { Command } from "commander"
+import { readFile } from "node:fs/promises"
+import { join } from "node:path"
+import { buildClient } from "../../lib/client"
+import { readProjectConfig } from "../../lib/config"
+import { ui, fail, extractServerError } from "../../lib/ui"
+
+export function functionsDeployCommand(): Command {
+  return new Command("deploy")
+    .description("Deploy the function in the current directory.")
+    .option("--source <file>", "Source file relative to cwd", "index.ts")
+    .option(
+      "--update-runtime",
+      "Bump this function to the latest runtime layer. Default: keep pinned to the runtime it last deployed against."
+    )
+    .option("--watch", "(future) keep running and redeploy on file changes")
+    .action(async (opts: { source: string; watch?: boolean; updateRuntime?: boolean }) => {
+      if (opts.watch) {
+        fail("--watch is not implemented yet. Use `zavu functions invoke` for local iteration.")
+      }
+      const config = await readProjectConfig()
+      if (!config) {
+        fail("No .zavu/config.json found. Run `zavu functions init` first or `cd` into a function directory.")
+      }
+      const client = await buildClient()
+
+      let sourceCode: string
+      try {
+        sourceCode = await readFile(join(process.cwd(), opts.source), "utf8")
+      } catch {
+        fail(`Could not read ${opts.source}. Pass --source <file> if your entrypoint is named differently.`)
+      }
+
+      // Read declared dependencies from package.json (if present). The server's
+      // Build Worker installs these and bundles them in.
+      let dependencies: Record<string, string> = {}
+      try {
+        const pkgRaw = await readFile(join(process.cwd(), "package.json"), "utf8")
+        const pkg = JSON.parse(pkgRaw) as { dependencies?: Record<string, string> }
+        dependencies = pkg.dependencies ?? {}
+      } catch {
+        // No package.json — fine for templates with zero deps.
+      }
+
+      ui.step(`Deploying ${config!.name} (${config!.slug})…`)
+      const startedAt = Date.now()
+
+      const res = await fetch(
+        `${client.baseURL}/v1/functions/${config!.functionId}/deploy`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${client.apiKey}`,
+          },
+          body: JSON.stringify({
+            sourceCode,
+            dependencies,
+            ...(opts.updateRuntime ? { updateRuntime: true } : {}),
+          }),
+        }
+      )
+      if (!res.ok) {
+        fail(await extractServerError(res, `Deploy request rejected (${res.status})`))
+      }
+      const created = (await res.json()) as { deployment?: { id: string } }
+      const deploymentId = created.deployment?.id
+      if (!deploymentId) {
+        fail("Server did not return a deployment id.")
+      }
+      ui.hint(`deployment id: ${deploymentId}`)
+
+      // Poll deployment status until terminal. The server's deploy action
+      // updates `status` through bundling → uploading → publishing → active|failed.
+      let lastStatus = ""
+      while (true) {
+        await sleep(1500)
+        const detailRes = await fetch(
+          `${client.baseURL}/v1/functions/deployments/${deploymentId}`,
+          { headers: { Authorization: `Bearer ${client.apiKey}` } }
+        )
+        if (!detailRes.ok) {
+          ui.warn(`Status poll failed (${detailRes.status}); will retry…`)
+          continue
+        }
+        const detailJson = (await detailRes.json()) as {
+          deployment?: {
+            status: string
+            errorMessage?: string | null
+            reconcileSummary?: ReconcileSummary | null
+            reconcileWarning?: string | null
+          }
+        }
+        const d = detailJson.deployment
+        if (!d) {
+          ui.warn("Status poll returned no deployment; will retry…")
+          continue
+        }
+        if (d.status !== lastStatus) {
+          ui.step(`status: ${d.status}`)
+          lastStatus = d.status
+        }
+        if (d.status === "active") {
+          await ui.scrambleSuccess(
+            `Deployed in ${((Date.now() - startedAt) / 1000).toFixed(1)}s`
+          )
+          if (config!.publicUrl) ui.hint(`Public URL: ${config!.publicUrl}`)
+          printReconcileSummary(d.reconcileSummary, d.reconcileWarning)
+          return
+        }
+        if (d.status === "failed") {
+          fail(d.errorMessage ?? "Deploy failed.")
+        }
+      }
+    })
+}
+
+// Shape of `deployment.reconcileSummary` from the backend. Populated when the
+// user's source code calls `defineAgent` / `defineTool` — undefined / null
+// when there's nothing to sync (then we render nothing).
+interface ReconcileSummary {
+  agentsCreated: string[]
+  agentsUpdated: string[]
+  agentsDeleted: string[]
+  toolsCreated: string[]
+  toolsUpdated: string[]
+  toolsDeleted: string[]
+  warnings: string[]
+}
+
+function printReconcileSummary(
+  summary: ReconcileSummary | null | undefined,
+  warning: string | null | undefined
+): void {
+  if (!summary && !warning) return
+  if (summary) {
+    const agentsTouched =
+      summary.agentsCreated.length +
+      summary.agentsUpdated.length +
+      summary.agentsDeleted.length
+    const toolsTouched =
+      summary.toolsCreated.length +
+      summary.toolsUpdated.length +
+      summary.toolsDeleted.length
+    if (agentsTouched > 0) {
+      ui.info("Agents synced:")
+      for (const n of summary.agentsCreated) ui.hint(`  + ${n}`)
+      for (const n of summary.agentsUpdated) ui.hint(`  ~ ${n}`)
+      for (const n of summary.agentsDeleted) ui.hint(`  - ${n}`)
+    }
+    if (toolsTouched > 0) {
+      ui.info("Tools synced:")
+      for (const n of summary.toolsCreated) ui.hint(`  + ${n}`)
+      for (const n of summary.toolsUpdated) ui.hint(`  ~ ${n}`)
+      for (const n of summary.toolsDeleted) ui.hint(`  - ${n}`)
+    }
+    for (const w of summary.warnings) ui.warn(w)
+  }
+  if (warning) ui.warn(`manifest probe: ${warning}`)
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}

@@ -1,0 +1,30 @@
+{
+  "name": "@zavudev/cli",
+  "version": "0.1.0",
+  "description": "Official CLI for Zavu — deploy Functions, send messages, manage senders & contacts.",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "zavu": "./dist/zavu.js"
+  },
+  "scripts": {
+    "dev": "bun run src/index.ts",
+    "build": "bun build src/index.ts --target=bun --outfile dist/zavu.js",
+    "build:macos-arm64": "bun build --compile --target=bun-darwin-arm64 src/index.ts --outfile dist/zavu-macos-arm64",
+    "build:macos-x64": "bun build --compile --target=bun-darwin-x64 src/index.ts --outfile dist/zavu-macos-x64",
+    "build:linux-x64": "bun build --compile --target=bun-linux-x64 src/index.ts --outfile dist/zavu-linux-x64",
+    "build:linux-arm64": "bun build --compile --target=bun-linux-arm64 src/index.ts --outfile dist/zavu-linux-arm64",
+    "build:windows-x64": "bun build --compile --target=bun-windows-x64 src/index.ts --outfile dist/zavu-windows-x64.exe",
+    "build:all": "bun run build:macos-arm64 && bun run build:macos-x64 && bun run build:linux-x64 && bun run build:linux-arm64 && bun run build:windows-x64"
+  },
+  "dependencies": {
+    "@zavudev/sdk": "*",
+    "commander": "^12.1.0",
+    "kleur": "^4.1.5",
+    "prompts": "^2.4.2"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "@types/prompts": "^2.4.9"
+  }
+}
