@@ -69,7 +69,21 @@ done
 
 echo "[tap] Cloning zavudev/homebrew-tools..."
 gh repo clone zavudev/homebrew-tools "$WORK/tap"
-mkdir -p "$WORK/tap/Formula"
+cd "$WORK/tap"
+
+# Set a local git identity so commits work in CI runners (which have no global
+# git config). In dev, this overrides your global config only inside this temp
+# clone — your real config is untouched.
+git config user.name  "${GIT_AUTHOR_NAME:-zavu-release-bot[bot]}"
+git config user.email "${GIT_AUTHOR_EMAIL:-bot@zavu.dev}"
+
+# Pull BEFORE rendering. Stainless's GoReleaser pushes to this same repo on its
+# own cadence, so the local clone could be stale by the time we land here. We
+# do the pull on a clean tree to avoid "cannot pull with rebase: unstaged
+# changes" — rendering Formula/zavu.rb happens right after.
+git pull --rebase origin main 2>&1 | tail -2 || true
+
+mkdir -p Formula
 
 echo "[tap] Rendering Formula/zavu.rb..."
 sed \
@@ -78,13 +92,7 @@ sed \
   -e "s|{{SHA_MACOS_X64}}|$SHA_MACOS_X64|g" \
   -e "s|{{SHA_LINUX_ARM64}}|$SHA_LINUX_ARM64|g" \
   -e "s|{{SHA_LINUX_X64}}|$SHA_LINUX_X64|g" \
-  "$TEMPLATE" > "$WORK/tap/Formula/zavu.rb"
-
-cd "$WORK/tap"
-
-# Stainless's GoReleaser pushes to this same repo on its own release cadence.
-# Rebase before push to avoid stomping over a concurrent zavudev.rb commit.
-git pull --rebase origin main 2>&1 | tail -2 || true
+  "$TEMPLATE" > Formula/zavu.rb
 
 git add Formula/zavu.rb
 if git diff --cached --quiet; then
