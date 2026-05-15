@@ -26,19 +26,53 @@ interface InvokeOpts {
   dataFile?: string
   source: string
   live?: boolean
+  // Tool-dispatch mode: instead of calling the function's default handler with
+  // an event, look up a tool by name in the registry that `defineTool` populated
+  // at module load and call its handler directly. Mirrors what the wrapper does
+  // in production when the agent calls a tool.
+  tool?: string
+  args?: string
+  argsFile?: string
 }
 
 export function functionsInvokeCommand(): Command {
   return new Command("invoke")
-    .description("Run the function locally with a synthetic event.")
+    .description("Run the function locally with a synthetic event OR call a defineTool by name.")
     .option("--event <name>", "Event type (e.g. message.inbound)", "message.inbound")
     .option("--data <json>", "Inline JSON for event.data")
     .option("--data-file <path>", "Path to a JSON file for event.data")
     .option("--source <file>", "Source file", "index.ts")
     .option("--live", "Make real API calls (default: stubbed/mock mode)")
+    .option("--tool <name>", "Call a defineTool by name instead of dispatching an event")
+    .option("--args <json>", "Inline JSON for the tool's arguments")
+    .option("--args-file <path>", "Path to a JSON file for the tool's arguments")
     .action(async (opts: InvokeOpts) => {
       const config = await readProjectConfig()
       const creds = await readCredentials()
+
+      // ── Tool-dispatch mode ────────────────────────────────────────────────
+      // When --tool is passed, we ignore event/data and instead call a
+      // defineTool handler by name. The runner imports the user's source
+      // (which populates globalThis.__ZAVU_REGISTRY at module load via
+      // defineTool side effects), looks up the tool, and calls its handler.
+      const toolMode = Boolean(opts.tool)
+
+      let toolArgs: Record<string, unknown> = {}
+      if (toolMode) {
+        if (opts.argsFile) {
+          try {
+            toolArgs = JSON.parse(await readFile(opts.argsFile, "utf8"))
+          } catch (err) {
+            fail(`Could not parse --args-file: ${err instanceof Error ? err.message : err}`)
+          }
+        } else if (opts.args) {
+          try {
+            toolArgs = JSON.parse(opts.args)
+          } catch (err) {
+            fail(`Invalid --args JSON: ${err instanceof Error ? err.message : err}`)
+          }
+        }
+      }
 
       let data: unknown = { from: "+15555550100", text: "hello", channel: "whatsapp" }
       if (opts.dataFile) {
@@ -71,8 +105,15 @@ export function functionsInvokeCommand(): Command {
       await mkdir(runnerDir, { recursive: true })
       const runnerPath = join(runnerDir, "runner.ts")
 
+      // The runner imports the user's source as a SIDE EFFECT (defineAgent /
+      // defineTool register themselves at module load by pushing into
+      // globalThis.__ZAVU_REGISTRY). In tool mode we then read the registry
+      // and call the named tool's handler. In event mode we call the
+      // module's default export (if any).
+      const sourcePath = join(process.cwd(), opts.source).replace(/\\/g, "/")
       const runnerSource = `
-import handler from "${join(process.cwd(), opts.source).replace(/\\/g, "/")}"
+// Import the user module — defineAgent / defineTool fire here.
+import * as userModule from "${sourcePath}"
 
 ${opts.live ? "" : `
 // --- mock mode: stub outgoing HTTP so messages don't actually send ---
@@ -91,12 +132,47 @@ globalThis.fetch = (async (input: any, init?: any) => {
 }) as typeof fetch
 `}
 
-const event = ${JSON.stringify(event, null, 2)}
 const ctx = {
   awsRequestId: "local-" + Date.now(),
   getRemainingTimeInMillis: () => 30000,
+  projectId: ${JSON.stringify(config?.projectId ?? "project_local")},
+  functionId: ${JSON.stringify(config?.functionId ?? "fn_local")},
+  slug: ${JSON.stringify(config?.slug ?? "local")},
+  log: (...args: any[]) => console.log("[ctx.log]", ...args),
 }
 
+${toolMode ? `
+// ── Tool mode ──────────────────────────────────────────────────────────
+const toolName = ${JSON.stringify(opts.tool)}
+const toolArgs = ${JSON.stringify(toolArgs)}
+const registry = (globalThis as any).__ZAVU_REGISTRY ?? { agents: [], tools: [] }
+const tool = registry.tools.find((t: any) => t.name === toolName)
+if (!tool) {
+  console.error("✗ tool not found:", toolName)
+  console.error("  available tools:", registry.tools.map((t: any) => t.name).join(", ") || "(none)")
+  process.exit(2)
+}
+console.log("→ invoking tool:", toolName)
+console.log("  args:", JSON.stringify(toolArgs))
+const start = Date.now()
+try {
+  const result = await tool.handler(toolArgs, ctx)
+  console.log("← result:", JSON.stringify(result, null, 2))
+  console.log("  duration:", (Date.now() - start) + "ms")
+} catch (err) {
+  console.error("✗ tool handler threw:", err)
+  process.exit(1)
+}
+` : `
+// ── Event mode ─────────────────────────────────────────────────────────
+const event = ${JSON.stringify(event, null, 2)}
+const handler = (userModule as any).default ?? (userModule as any).handler
+if (typeof handler !== "function") {
+  console.error("✗ no default export found in ${opts.source}.")
+  console.error("  Add 'export default defineFunction(async (event, ctx) => { ... })'")
+  console.error("  to handle events, or use --tool <name> to call a defineTool directly.")
+  process.exit(2)
+}
 console.log("→ invoking with event.type =", event.type)
 const start = Date.now()
 try {
@@ -107,6 +183,7 @@ try {
   console.error("✗ handler threw:", err)
   process.exit(1)
 }
+`}
 `
       await writeFile(runnerPath, runnerSource, "utf8")
 
@@ -120,7 +197,10 @@ try {
         ZAVU_API_BASE_URL: creds?.apiBaseUrl ?? "https://api.zavu.dev",
       }
 
-      ui.step(`Invoking ${config?.slug ?? "local"} with ${opts.event} (${opts.live ? "LIVE" : "mock"})`)
+      const label = toolMode
+        ? `tool:${opts.tool}`
+        : `event:${opts.event}`
+      ui.step(`Invoking ${config?.slug ?? "local"} → ${label} (${opts.live ? "LIVE" : "mock"})`)
       try {
         await new Promise<void>((resolve, reject) => {
           const child = spawn("bun", ["run", runnerPath], {

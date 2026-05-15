@@ -185,12 +185,20 @@ export function agentsCommand(): Command {
       }
     })
 
-  cmd
+  // `executions` is a command group with `list` (default) and `get` subcommands.
+  // For backwards-compat we still accept `zavu agents executions --sender X`
+  // (no subcommand) and treat it as `list`.
+  const executions = cmd
     .command("executions")
+    .description("Agent execution history (list / get single).")
+
+  executions
+    .command("list", { isDefault: true })
     .description("List recent agent executions.")
     .requiredOption("--sender <senderId>", "Sender ID")
     .option("--status <status>", "Filter by status")
     .option("--limit <n>", "Page size", "20")
+    .option("--json", "Output full JSON (includes errorMessage)")
     .action(async (opts) => {
       const api = await buildApi()
       try {
@@ -198,7 +206,14 @@ export function agentsCommand(): Command {
           status: opts.status,
           limit: opts.limit,
         })
-        if (!res.items?.length) return ui.info("No executions.")
+        if (!res.items?.length) {
+          ui.info("No executions.")
+          return
+        }
+        if (opts.json) {
+          console.log(JSON.stringify(res, null, 2))
+          return
+        }
         ui.table(
           res.items.map((e) => ({
             id: e.id,
@@ -208,6 +223,58 @@ export function agentsCommand(): Command {
             ms: String(e.latencyMs ?? "—"),
           }))
         )
+        // Surface the error reason for any failed executions so the user
+        // doesn't have to drop to curl to diagnose. Truncated to keep the
+        // output tight; --json shows the full payload.
+        const errored = res.items.filter((e) => e.status !== "success" && e.errorMessage)
+        if (errored.length > 0) {
+          ui.info("\nError details:")
+          for (const e of errored) {
+            const msg = String(e.errorMessage).slice(0, 200)
+            ui.hint(`${e.id}  [${e.errorCode ?? e.status}]  ${msg}`)
+          }
+        }
+      } catch (err) {
+        fail(err instanceof Error ? err.message : String(err))
+      }
+    })
+
+  executions
+    .command("get <executionId>")
+    .description("Show a single execution with full error/response details.")
+    .requiredOption("--sender <senderId>", "Sender ID")
+    .option("--json", "Output full JSON")
+    .action(async (executionId, opts) => {
+      const api = await buildApi()
+      try {
+        const res = await api.get<{ execution: any }>(
+          `${agentBase(opts.sender)}/executions/${executionId}`
+        )
+        const e = res.execution
+        if (opts.json) {
+          console.log(JSON.stringify(e, null, 2))
+          return
+        }
+        // Human-readable detail view. Keep it dense but scannable.
+        ui.info(`id:           ${e.id}`)
+        ui.info(`agentId:      ${e.agentId}`)
+        ui.info(`status:       ${e.status}`)
+        if (e.inboundMessageId) ui.info(`inboundMsg:   ${e.inboundMessageId}`)
+        if (e.responseMessageId) ui.info(`responseMsg:  ${e.responseMessageId}`)
+        ui.info(`tokens in:    ${e.inputTokens ?? 0}`)
+        ui.info(`tokens out:   ${e.outputTokens ?? 0}`)
+        ui.info(`cost:         $${(e.cost ?? 0).toFixed(6)}`)
+        ui.info(`latency:      ${e.latencyMs ?? "—"} ms`)
+        ui.info(`createdAt:    ${e.createdAt}`)
+        if (e.errorMessage) {
+          ui.info(`\nerror code:   ${e.errorCode ?? "(none)"}`)
+          ui.info(`error message:`)
+          ui.hint(e.errorMessage)
+        }
+        if (e.responseText) {
+          ui.info(`\nresponse text:`)
+          ui.hint(e.responseText)
+        }
       } catch (err) {
         fail(err instanceof Error ? err.message : String(err))
       }
