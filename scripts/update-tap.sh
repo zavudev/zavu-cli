@@ -67,6 +67,13 @@ for name in SHA_MACOS_ARM64 SHA_MACOS_X64 SHA_LINUX_ARM64 SHA_LINUX_X64; do
   fi
 done
 
+# Configure git to use gh's token for HTTPS pushes. Required in CI because
+# `gh repo clone` doesn't inject a credential helper into the cloned repo's
+# git config — without this, the final `git push` fails with
+# "could not read Username for 'https://github.com'".
+# Safe in dev too: it only sets a credential.helper that delegates to gh.
+gh auth setup-git
+
 echo "[tap] Cloning zavudev/homebrew-tools..."
 gh repo clone zavudev/homebrew-tools "$WORK/tap"
 cd "$WORK/tap"
