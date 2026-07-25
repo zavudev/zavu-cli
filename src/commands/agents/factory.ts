@@ -84,14 +84,22 @@ export function attachFactoryCommands(parent: Command): void {
       "--sender <senderId>",
       "Sender the agent runs on. Sets the SENDER_ID secret automatically."
     )
-    .action(async (id: string, opts: { dir?: string; sender?: string }) => {
+    // Without this a booking agent ships handlers pointing at a webhook you
+    // have to build and host, so it cannot book until you do.
+    .option(
+      "--calendar <provider>",
+      "For booking agents: webhook (default) or calcom for a working Cal.com client"
+    )
+    .action(
+      async (id: string, opts: { dir?: string; sender?: string; calendar?: string }) => {
       const api = await buildApi()
 
       const { targetDir, template, senderSet } = await scaffoldTemplate(
         api,
         id,
         opts.dir,
-        opts.sender
+        opts.sender,
+        opts.calendar
       )
 
       await ui.scrambleSuccess(`Pulled "${template.name}".`)
@@ -102,6 +110,15 @@ export function attachFactoryCommands(parent: Command): void {
       if (!senderSet) {
         ui.hint(`${cli("senders list")}                    # find your sender id`)
         ui.hint(cli("fn secrets set SENDER_ID <senderId>"))
+      }
+      // The API returns every secret the agent needs, with a hint for each. Only
+      // SENDER_ID was ever set or mentioned, so you could follow these steps to
+      // the letter and end up with a booking agent that can never book — the
+      // first symptom arriving mid-call.
+      for (const secret of template.requiredSecrets ?? []) {
+        if (secret.key === "SENDER_ID") continue
+        ui.hint(`${cli(`fn secrets set ${secret.key} <value>`)}`)
+        ui.hint(`  ↳ ${secret.hint}`)
       }
       ui.hint(cli("deploy"))
       if (template.voice) {
@@ -184,12 +201,14 @@ async function scaffoldTemplate(
   api: ApiClient,
   id: string,
   dirOpt: string | undefined,
-  sender: string | undefined
+  sender: string | undefined,
+  calendar?: string
 ): Promise<{ targetDir: string; template: RenderedTemplate; senderSet: boolean }> {
   let template: RenderedTemplate
   try {
     const res = await api.get<{ template: RenderedTemplate }>(
-      `/v1/agent-templates/${encodeURIComponent(id)}`
+      `/v1/agent-templates/${encodeURIComponent(id)}`,
+      calendar ? { calendar } : undefined
     )
     template = res.template
   } catch (err) {

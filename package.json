@@ -1,7 +1,7 @@
 {
   "name": "zavudev",
-  "version": "0.5.1",
-  "description": "Official CLI for Zavu \u2014 deploy Functions, send messages, manage senders & contacts.",
+  "version": "0.6.2",
+  "description": "Official CLI for Zavu — deploy Functions, send messages, manage senders & contacts.",
   "type": "module",
   "bin": {
     "zavu": "./dist/zavu.js"
@@ -34,6 +34,7 @@
     "@types/bun": "latest",
     "@types/node": "^22",
     "@types/prompts": "^2.4.9",
-    "@types/qrcode-terminal": "^0.12.2"
+    "@types/qrcode-terminal": "^0.12.2",
+    "vitest": "^4.0.14"
   }
 }
