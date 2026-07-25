@@ -14,7 +14,7 @@
 import { Command } from "commander"
 import { spawn } from "node:child_process"
 import { readFile, writeFile, mkdir, rm } from "node:fs/promises"
-import { join } from "node:path"
+import { join, dirname, resolve } from "node:path"
 import { tmpdir } from "node:os"
 import { randomBytes } from "node:crypto"
 import { readProjectConfig, readCredentials } from "../../lib/config"
@@ -101,9 +101,16 @@ export function functionsInvokeCommand(): Command {
       // Build a temporary runner script that imports the user's source and
       // invokes its default export with our synthetic event. We monkey-patch
       // the global `fetch` for --mock mode so SDK calls become no-ops.
-      const runnerDir = join(tmpdir(), `zavu-invoke-${randomBytes(4).toString("hex")}`)
+      // The runner MUST live inside the user's project, not in tmpdir(). Bun
+      // resolves imports (and reads tsconfig `paths`) relative to the
+      // entrypoint, so a runner in /tmp cannot see the project's tsconfig —
+      // and `@zavudev/functions` then fails to resolve. That failure surfaced as the
+      // module never loading, which in turn made the registry look empty and
+      // printed the thoroughly misleading "available tools: (none)".
+      const projectDir = dirname(resolve(process.cwd(), opts.source))
+      const runnerDir = join(projectDir, ".zavu")
       await mkdir(runnerDir, { recursive: true })
-      const runnerPath = join(runnerDir, "runner.ts")
+      const runnerPath = join(runnerDir, `invoke-${randomBytes(4).toString("hex")}.ts`)
 
       // The runner imports the user's source as a SIDE EFFECT (defineAgent /
       // defineTool register themselves at module load by pushing into
@@ -114,6 +121,11 @@ export function functionsInvokeCommand(): Command {
       const runnerSource = `
 // Import the user module — defineAgent / defineTool fire here.
 import * as userModule from "${sourcePath}"
+// Keep the import alive. TypeScript elides an unreferenced namespace import,
+// and in --tool mode nothing else touches \`userModule\` — so the user's file
+// was never executed, defineTool never registered, and the run failed with the
+// thoroughly misleading "available tools: (none)".
+void userModule
 
 ${opts.live ? "" : `
 // --- mock mode: stub outgoing HTTP so messages don't actually send ---
@@ -207,11 +219,27 @@ try {
             stdio: "inherit",
             env,
           })
-          child.on("error", reject)
+          child.on("error", (err: NodeJS.ErrnoException) => {
+            // The local runner executes the function's TypeScript directly, which
+            // needs Bun. Every other command runs fine under plain Node (`npx
+            // zavu …`); only local invoke depends on it.
+            if (err.code === "ENOENT") {
+              reject(
+                new Error(
+                  "`zavu functions invoke` runs your function locally with Bun. " +
+                    "Install it from https://bun.sh, or deploy and test with `zavu functions deploy`."
+                )
+              )
+              return
+            }
+            reject(err)
+          })
           child.on("exit", (code) => (code === 0 ? resolve() : reject(new Error(`exit ${code}`))))
         })
       } finally {
-        await rm(runnerDir, { recursive: true, force: true })
+        // Only the generated runner — `.zavu/` also holds config.json and the
+        // local runtime stand-in.
+        await rm(runnerPath, { force: true })
       }
     })
 }

@@ -14,7 +14,7 @@ export interface CliFunctionTemplate {
   requiredSecrets: { key: string; hint: string }[]
 }
 
-const BLANK = `import { defineFunction } from "@zavu/functions"
+const BLANK = `import { defineFunction } from "@zavudev/functions"
 import Zavudev from "@zavudev/sdk"
 
 const zavu = new Zavudev({
@@ -67,7 +67,7 @@ const RESTAURANT = `// Restaurant reservations agent — fully declarative.
 // or \`zavu agents tools create\` commands — your function source IS the
 // source of truth.
 
-import { defineAgent, defineTool } from "@zavu/functions"
+import { defineAgent, defineTool } from "@zavudev/functions"
 
 // ---------------------------------------------------------------------------
 // 1) Declare the agent. Set SENDER_ID as a secret on the function in the

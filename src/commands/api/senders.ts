@@ -2,6 +2,29 @@ import { Command } from "commander"
 import { defineResource, loadJsonBody } from "../../lib/resource"
 import { ui, fail } from "../../lib/ui"
 
+// Build a sender create body from friendly flags. A sender needs a name plus at
+// least one channel identifier: a phone number (SMS/WhatsApp/voice) or an email
+// address (email channel). Advanced fields still go through --data/--file.
+function buildSenderBody(opts: Record<string, any>): Record<string, unknown> {
+  if (!opts.name) fail("`--name` is required (or pass --data/--file with full JSON).")
+  if (!opts.phone && !opts.email) {
+    fail("Provide --phone <E.164> and/or --email <address> (or --data/--file).")
+  }
+  const body: Record<string, unknown> = { name: opts.name }
+  if (opts.phone) body.phoneNumber = opts.phone
+  if (opts.email) body.emailAddress = opts.email
+  if (opts.emailFromName) body.emailFromName = opts.emailFromName
+  if (opts.setDefault) body.setAsDefault = true
+  if (opts.webhookUrl) body.webhookUrl = opts.webhookUrl
+  if (opts.webhookEvents) {
+    body.webhookEvents = String(opts.webhookEvents)
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean)
+  }
+  return body
+}
+
 export const sendersCommand = (): Command =>
   defineResource({
     name: "senders",
@@ -9,16 +32,44 @@ export const sendersCommand = (): Command =>
     basePath: "/v1/senders",
     itemKey: "sender",
     idArg: "senderId",
-    create: true,
+    // `create` is defined below with friendly flags instead of the generic
+    // JSON-only one.
+    create: false,
     remove: true,
     format: (s) => ({
       id: s.id,
       name: s.name,
       phone: s.phoneNumber ?? "—",
+      email: s.emailAddress ?? "—",
       default: s.isDefault ? "yes" : "",
       whatsapp: s.whatsapp ? "yes" : "",
     }),
     customize: (cmd, apiFactory) => {
+      cmd
+        .command("create")
+        .description("Create a sender. Use --name + --phone and/or --email, or --data/--file.")
+        .option("--name <name>", "Display name")
+        .option("--phone <e164>", "Phone number in E.164 (SMS / WhatsApp / voice)")
+        .option("--email <address>", "From-address for the email channel (domain must be verified)")
+        .option("--email-from-name <name>", "Display name shown in the recipient's inbox")
+        .option("--set-default", "Make this the project's default sender")
+        .option("--webhook-url <url>", "HTTPS URL for webhook events")
+        .option("--webhook-events <list>", "Comma-separated events to subscribe to")
+        .option("--data <json>", "Full JSON body (advanced)")
+        .option("--file <path>", "Path to a JSON body file (advanced)")
+        .action(async (opts) => {
+          const body = opts.data || opts.file ? await loadJsonBody(opts) : buildSenderBody(opts)
+          const api = await apiFactory()
+          try {
+            const res = await api.post<{ sender?: any }>("/v1/senders", body)
+            const sender = res.sender ?? res
+            ui.success(`Created sender ${sender?.id ?? "(no id)"}`)
+            process.stdout.write(JSON.stringify(sender, null, 2) + "\n")
+          } catch (err) {
+            fail(err instanceof Error ? err.message : String(err))
+          }
+        })
+
       cmd
         .command("update <senderId>")
         .description("Update a sender (--data '{...}' or --file <path>).")

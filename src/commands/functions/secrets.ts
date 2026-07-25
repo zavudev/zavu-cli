@@ -13,7 +13,7 @@ import { Command } from "commander"
 import { readFile } from "node:fs/promises"
 import { buildClient } from "../../lib/client"
 import { readProjectConfig } from "../../lib/config"
-import { ui, fail, extractServerError } from "../../lib/ui"
+import { ui, fail, cli, extractServerError } from "../../lib/ui"
 
 interface SecretRow {
   id: string
@@ -178,7 +178,7 @@ export function functionsSecretsCommand(): Command {
         `/v1/functions/${functionId}/secrets/${encodeURIComponent(key)}`
       )
       ui.success(`Removed ${key}`)
-      ui.hint("Run `zavu deploy` to push the change to Lambda.")
+      ui.hint(`Run \`${cli("deploy")}\` to push the change to Lambda.`)
     })
 
   return cmd

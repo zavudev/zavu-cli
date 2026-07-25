@@ -131,11 +131,25 @@ export function functionsDeployCommand(): Command {
           lastStatus = d.status
         }
         if (d.status === "active") {
+          // The summary goes BEFORE the success line. Under a green ✓ nobody
+          // reads it, and the things it reports — tools that will never fire,
+          // a second agent shadowing the first, a manifest probe that threw —
+          // are precisely the ones that make a "successful" deploy a lie.
+          printReconcileSummary(d.reconcileSummary, d.reconcileWarning)
           await ui.scrambleSuccess(
             `Deployed in ${((Date.now() - startedAt) / 1000).toFixed(1)}s`
           )
           if (config!.publicUrl) ui.hint(`Public URL: ${config!.publicUrl}`)
-          printReconcileSummary(d.reconcileSummary, d.reconcileWarning)
+          // The Lambda is live either way, so this is not `fail()`. But a
+          // probe that threw means the agents and tools in the source were
+          // never synced, and a script that only checks the exit code must not
+          // read that as success.
+          if (d.reconcileWarning) {
+            ui.warn(
+              "Deployed, but the declarations in your source were NOT synced. Fix the error above and deploy again."
+            )
+            process.exitCode = 1
+          }
           return
         }
         if (d.status === "failed") {

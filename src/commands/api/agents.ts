@@ -6,6 +6,7 @@ import { Command } from "commander"
 import { buildApi } from "../../lib/api"
 import { loadJsonBody } from "../../lib/resource"
 import { ui, fail } from "../../lib/ui"
+import { attachFactoryCommands } from "../agents/factory"
 
 function agentBase(senderId: string) {
   return `/v1/senders/${senderId}/agent`
@@ -82,6 +83,165 @@ export function agentsCommand(): Command {
       }
     })
 
+  cmd
+    .command("list")
+    .description("List every agent in the project, including ones with no sender.")
+    .option("--limit <n>", "Page size", "50")
+    .option("--json", "Print the raw JSON response")
+    .action(async (opts) => {
+      const api = await buildApi()
+      try {
+        const res = await api.get<{ items: any[]; nextCursor: string | null }>(
+          "/v1/agents",
+          { limit: opts.limit }
+        )
+        if (opts.json) {
+          process.stdout.write(JSON.stringify(res, null, 2) + "\n")
+          return
+        }
+        if (!res.items?.length) {
+          ui.info("No agents yet. Create one with `agents create` or `agents pull <id>`.")
+          return
+        }
+        ui.table(
+          res.items.map((a) => ({
+            id: a.id,
+            name: a.name,
+            // A voice agent whose voice block is missing is the interesting
+            // case, so show what the agent actually is, not what it is named.
+            kind: a.voice?.enabled ? "voice" : "text",
+            enabled: a.enabled ? "yes" : "no",
+            senders: String((a.senderIds ?? []).length),
+            model: a.model,
+          }))
+        )
+        if (res.nextCursor) ui.hint("More results — pass --limit to see them.")
+      } catch (err) {
+        fail(err instanceof Error ? err.message : String(err))
+      }
+    })
+
+  // `agents senders` — an agent answers on N senders; this is how you wire them
+  // up from code. Previously only reachable from the dashboard.
+  const senders = cmd
+    .command("senders")
+    .description("Senders an agent answers on.")
+
+  senders
+    .command("connect")
+    .description("Make the agent answer on a sender.")
+    .requiredOption("--agent <agentId>", "Agent ID (see `agents list`)")
+    .requiredOption("--sender <senderId>", "Sender ID (see `senders list`)")
+    .action(async (opts) => {
+      const api = await buildApi()
+      try {
+        const res = await api.post<{ agent: { senderIds?: string[] } }>(
+          `/v1/agents/${opts.agent}/senders`,
+          { senderId: opts.sender }
+        )
+        ui.success("Sender connected.")
+        ui.hint(`now answering on ${(res.agent.senderIds ?? []).length} sender(s)`)
+      } catch (err) {
+        fail(err instanceof Error ? err.message : String(err))
+      }
+    })
+
+  senders
+    .command("disconnect")
+    .description("Stop the agent answering on a sender.")
+    .requiredOption("--agent <agentId>", "Agent ID")
+    .requiredOption("--sender <senderId>", "Sender ID")
+    .action(async (opts) => {
+      const api = await buildApi()
+      try {
+        await api.del(`/v1/agents/${opts.agent}/senders/${opts.sender}`)
+        ui.success("Sender disconnected.")
+      } catch (err) {
+        fail(err instanceof Error ? err.message : String(err))
+      }
+    })
+
+  // `agents test` — the inner loop. Runs the agent and prints what it WOULD
+  // reply, without sending anything to anyone and without charging the account,
+  // so it is safe to run on every prompt edit. Everything else in this CLI
+  // either needs a real channel or is read-only postmortem.
+  cmd
+    .command("test")
+    .description("Send the agent a message and print its reply. Nothing is delivered.")
+    .option("--agent <agentId>", "Agent ID (from `agents list`)")
+    .option("--sender <senderId>", "Sender ID, if you'd rather address the agent by its sender")
+    .requiredOption("--message <text>", "What to say to the agent")
+    .option(
+      "--turn <text...>",
+      "Prior turns, alternating user/assistant, oldest first (repeatable)"
+    )
+    .option("--no-knowledge", "Skip knowledge-base retrieval")
+    .option("--json", "Print the raw JSON response")
+    .action(async (opts) => {
+      const api = await buildApi()
+      // An agent is addressed by its own id. `--sender` resolves through the
+      // sender-scoped lookup, which only ever finds ONE agent per sender.
+      let agentId: string | undefined = opts.agent
+      if (!agentId) {
+        if (!opts.sender) {
+          fail("Pass --agent <agentId> (see `agents list`) or --sender <senderId>.")
+          return
+        }
+        try {
+          const res = await api.get<{ agent: { id: string } | null }>(agentBase(opts.sender))
+          if (!res.agent) {
+            fail("That sender has no agent.")
+            return
+          }
+          agentId = res.agent.id
+        } catch (err) {
+          fail(err instanceof Error ? err.message : String(err))
+          return
+        }
+      }
+      // Alternating from the user, because a conversation always opens with one.
+      const history = (opts.turn ?? []).map((content: string, i: number) => ({
+        role: i % 2 === 0 ? "user" : "assistant",
+        content,
+      }))
+      try {
+        const res = await api.post<{
+          success: boolean
+          text: string | null
+          error: string | null
+          inputTokens: number
+          outputTokens: number
+          latencyMs: number
+          knowledgeChunksUsed: number
+          warnings: string[]
+        }>(`/v1/agents/${agentId}/test`, {
+          message: opts.message,
+          ...(history.length ? { history } : {}),
+          useKnowledgeBase: opts.knowledge !== false,
+        })
+        if (opts.json) {
+          process.stdout.write(JSON.stringify(res, null, 2) + "\n")
+          return
+        }
+        if (!res.success) {
+          fail(res.error || "Agent run failed")
+          return
+        }
+        process.stdout.write("\n" + (res.text ?? "") + "\n\n")
+        ui.hint(
+          `${res.inputTokens}→${res.outputTokens} tokens · ${res.latencyMs}ms` +
+            (res.knowledgeChunksUsed
+              ? ` · ${res.knowledgeChunksUsed} knowledge chunk(s)`
+              : "")
+        )
+        // Printed loudly: the whole point is that a dry run must never be
+        // mistaken for proof that the agent works on a real channel.
+        for (const w of res.warnings ?? []) ui.warn(w)
+      } catch (err) {
+        fail(err instanceof Error ? err.message : String(err))
+      }
+    })
+
   // `agents create` — two modes:
   //   (a) Named flags. Each option is its own shell arg so terminal paste
   //       indentation / line-wrap can't corrupt the value. Easier 95% path.
@@ -110,6 +270,7 @@ export function agentsCommand(): Command {
       "Comma-separated message types that trigger the agent",
       "text"
     )
+    .option("--enabled <bool>", "Answer real messages right away. Default false.")
     .option("--data <json>", "Full JSON body (advanced)")
     .option("--file <path>", "Path to a JSON body file (advanced)")
     .action(async (opts) => {
@@ -119,8 +280,19 @@ export function agentsCommand(): Command {
           : await buildAgentBodyFromFlags(opts)
       const api = await buildApi()
       try {
-        const res = await api.post(agentBase(opts.sender), body)
+        const res = await api.post<{ agent?: { enabled?: boolean } }>(
+          agentBase(opts.sender),
+          body
+        )
         ui.success("Agent created.")
+        // An agent is created off. Saying so here — rather than leaving it as
+        // one line of a 25-line JSON blob — is the difference between knowing
+        // and finding out when nobody gets an answer.
+        if (res.agent && res.agent.enabled === false) {
+          ui.warn(
+            "Created disabled: it will not answer real messages yet. Turn it on with `agents update --sender <id> --enabled true`."
+          )
+        }
         process.stdout.write(JSON.stringify(res, null, 2) + "\n")
       } catch (err) {
         fail(err instanceof Error ? err.message : String(err))
@@ -317,11 +489,19 @@ export function agentsCommand(): Command {
   // (name, description, webhook) is easier as discrete flags.
   attachToolsSubResource(cmd)
   attachSubResource(cmd, "flows", "flowId", "/flows", { create: true, update: true, remove: true })
-  attachSubResource(cmd, "knowledge-bases", "kbId", "/knowledge-bases", {
+  const kb = attachSubResource(cmd, "knowledge-bases", "kbId", "/knowledge-bases", {
     create: true,
     update: true,
     remove: true,
+    createFlags: [
+      { key: "name", description: "Knowledge base name" },
+      { key: "description", description: "What this knowledge base holds" },
+    ],
   })
+  attachKnowledgeBaseDocuments(kb)
+
+  // Factory agents: `zavu agents catalog` + `zavu agents pull <id>`.
+  attachFactoryCommands(cmd)
 
   return cmd
 }
@@ -485,13 +665,113 @@ async function buildToolBodyFromFlags(
   return body
 }
 
+/**
+ * Documents inside a knowledge base.
+ *
+ * Without these, the CLI could create an empty knowledge base and nothing else,
+ * so retrieval — the difference between an agent that cites your docs and one
+ * that invents them — was reachable only by hand-rolling REST calls.
+ */
+function attachKnowledgeBaseDocuments(kb: Command) {
+  const docs = kb
+    .command("documents")
+    .description("Documents inside a knowledge base. This is what RAG retrieves.")
+
+  const docsBase = (senderId: string, kbId: string) =>
+    `${agentBase(senderId)}/knowledge-bases/${kbId}/documents`
+
+  docs
+    .command("list")
+    .requiredOption("--sender <senderId>", "Sender ID")
+    .requiredOption("--kb <kbId>", "Knowledge base ID")
+    .option("--limit <n>", "Page size", "50")
+    .action(async (opts) => {
+      const api = await buildApi()
+      try {
+        const res = await api.get(docsBase(opts.sender, opts.kb), { limit: opts.limit })
+        process.stdout.write(JSON.stringify(res, null, 2) + "\n")
+      } catch (err) {
+        fail(err instanceof Error ? err.message : String(err))
+      }
+    })
+
+  docs
+    .command("add")
+    .description("Add a document. It is chunked and embedded automatically.")
+    .requiredOption("--sender <senderId>", "Sender ID")
+    .requiredOption("--kb <kbId>", "Knowledge base ID")
+    .requiredOption("--title <title>", "Document title")
+    .option("--content <text>", "Document body")
+    // A knowledge base is usually a file on disk, not something you paste into
+    // a shell — and pasting loses the newlines that chunking relies on.
+    .option("--content-file <path>", "Read the body from a file")
+    .action(async (opts) => {
+      let content: string | undefined = opts.content
+      if (!content && opts.contentFile) {
+        const { readFile } = await import("node:fs/promises")
+        content = await readFile(opts.contentFile, "utf8")
+      }
+      if (!content) {
+        fail("Provide the document body with --content <text> or --content-file <path>.")
+        return
+      }
+      const api = await buildApi()
+      try {
+        const res = await api.post(docsBase(opts.sender, opts.kb), {
+          title: opts.title,
+          content,
+        })
+        ui.success("Document added.")
+        process.stdout.write(JSON.stringify(res, null, 2) + "\n")
+        ui.hint(
+          "Processing takes a few seconds. Verify with `agents test` — it reports how many knowledge chunks were used."
+        )
+      } catch (err) {
+        fail(err instanceof Error ? err.message : String(err))
+      }
+    })
+
+  docs
+    .command("get <docId>")
+    .requiredOption("--sender <senderId>", "Sender ID")
+    .requiredOption("--kb <kbId>", "Knowledge base ID")
+    .action(async (docId, opts) => {
+      const api = await buildApi()
+      try {
+        const res = await api.get(`${docsBase(opts.sender, opts.kb)}/${docId}`)
+        process.stdout.write(JSON.stringify(res, null, 2) + "\n")
+      } catch (err) {
+        fail(err instanceof Error ? err.message : String(err))
+      }
+    })
+
+  docs
+    .command("delete <docId>")
+    .requiredOption("--sender <senderId>", "Sender ID")
+    .requiredOption("--kb <kbId>", "Knowledge base ID")
+    .action(async (docId, opts) => {
+      const api = await buildApi()
+      try {
+        await api.del(`${docsBase(opts.sender, opts.kb)}/${docId}`)
+        ui.success("Deleted.")
+      } catch (err) {
+        fail(err instanceof Error ? err.message : String(err))
+      }
+    })
+}
+
 function attachSubResource(
   parent: Command,
   groupName: string,
   idArg: string,
   pathSuffix: string,
-  ops: { create?: boolean; update?: boolean; remove?: boolean }
-) {
+  ops: {
+    create?: boolean
+    update?: boolean
+    remove?: boolean
+    createFlags?: Array<{ key: string; description: string }>
+  }
+): Command {
   const sub = parent
     .command(groupName)
     .description(`Manage agent ${groupName.replace(/-/g, " ")}.`)
@@ -526,22 +806,36 @@ function attachSubResource(
     })
 
   if (ops.create) {
-    sub
+    const create = sub
       .command("create")
       .requiredOption("--sender <senderId>", "Sender ID")
       .option("--data <json>", "Inline JSON body")
       .option("--file <path>", "Path to a JSON file")
-      .action(async (opts) => {
-        const body = await loadJsonBody(opts)
-        const api = await buildApi()
-        try {
-          const res = await api.post(`${agentBase(opts.sender)}${pathSuffix}`, body)
-          ui.success("Created.")
-          process.stdout.write(JSON.stringify(res, null, 2) + "\n")
-        } catch (err) {
-          fail(err instanceof Error ? err.message : String(err))
-        }
-      })
+    // Simple resources get discrete flags so nobody has to hand-write JSON for
+    // a two-field body — `--data '{"name":"..."}'` is a hostile first
+    // experience, and a malformed brace only ever came back as
+    // "Invalid request body".
+    for (const f of ops.createFlags ?? []) {
+      create.option(`--${f.key} <value>`, f.description)
+    }
+    create.action(async (opts) => {
+      const body =
+        opts.data || opts.file
+          ? await loadJsonBody(opts)
+          : Object.fromEntries(
+              (ops.createFlags ?? [])
+                .filter((f) => opts[f.key] !== undefined)
+                .map((f) => [f.key, opts[f.key]])
+            )
+      const api = await buildApi()
+      try {
+        const res = await api.post(`${agentBase(opts.sender)}${pathSuffix}`, body)
+        ui.success("Created.")
+        process.stdout.write(JSON.stringify(res, null, 2) + "\n")
+      } catch (err) {
+        fail(err instanceof Error ? err.message : String(err))
+      }
+    })
   }
 
   if (ops.update) {
@@ -577,4 +871,6 @@ function attachSubResource(
         }
       })
   }
+
+  return sub
 }

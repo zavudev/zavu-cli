@@ -12,7 +12,7 @@ import { Command } from "commander"
 import prompts from "prompts"
 import { buildClient } from "../../lib/client"
 import { readProjectConfig } from "../../lib/config"
-import { ui, fail, extractServerError } from "../../lib/ui"
+import { ui, fail, cli, extractServerError } from "../../lib/ui"
 
 interface DeploymentRow {
   id: string
@@ -123,7 +123,7 @@ export function functionsVersionsCommand(): Command {
               : "—",
           }))
         )
-        ui.hint("Roll back with: zavu fn rollback v<N>")
+        ui.hint(`Roll back with: ${cli("fn rollback v<N>")}`)
       }
     )
 

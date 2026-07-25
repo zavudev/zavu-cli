@@ -54,6 +54,29 @@ export async function readCredentials(): Promise<GlobalCredentials | null> {
   }
 }
 
+/**
+ * Credentials for this run, preferring the environment over the saved file.
+ *
+ * `ZAVUDEV_API_KEY` (with optional `ZAVUDEV_API_BASE_URL`) lets a container, a
+ * CI job, or a coding agent authenticate without an interactive `zavu login`
+ * and without a writable home directory. The docs have promised this for a
+ * while; only `login` actually read it, so every other command still demanded
+ * the file and died with "Not logged in" in exactly the environments this is
+ * for.
+ */
+export async function resolveCredentials(): Promise<GlobalCredentials | null> {
+  const envKey = process.env.ZAVUDEV_API_KEY?.trim()
+  if (envKey) {
+    return {
+      apiKey: envKey,
+      apiBaseUrl:
+        process.env.ZAVUDEV_API_BASE_URL?.trim() || "https://api.zavu.dev",
+      updatedAt: new Date().toISOString(),
+    }
+  }
+  return readCredentials()
+}
+
 export async function writeCredentials(creds: GlobalCredentials): Promise<void> {
   await mkdir(HOME_CONFIG_DIR, { recursive: true, mode: 0o700 })
   await writeFile(CREDENTIALS_PATH, JSON.stringify(creds, null, 2), { mode: 0o600 })

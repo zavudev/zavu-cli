@@ -1,4 +1,4 @@
-#!/usr/bin/env bun
+#!/usr/bin/env node
 // Zavu CLI entry point.
 //
 // Distribution targets:
@@ -19,6 +19,7 @@
 //     surface stays in lockstep with apps/docs/openapi.json.
 
 import { Command } from "commander"
+import { cli } from "./lib/ui"
 // Version is sourced from package.json so it stays in sync with each release
 // without anyone having to remember to bump a string here. Bun's --compile
 // inlines this JSON into the standalone binary at build time.
@@ -46,10 +47,11 @@ import { urlsCommand } from "./commands/api/urls"
 import { subAccountsCommand } from "./commands/api/subAccounts"
 import { tenDlcCommand } from "./commands/api/tenDlc"
 import { agentsCommand } from "./commands/api/agents"
+import { callsCommand } from "./commands/api/calls"
+import { telegramCommand } from "./commands/api/telegram"
+import { emailDomainsCommand } from "./commands/api/emailDomains"
 import {
   balanceCommand,
-  planCommand,
-  usageCommand,
   introspectCommand,
 } from "./commands/api/account"
 
@@ -84,6 +86,9 @@ program.addCommand(broadcastsCommand())
 program.addCommand(phoneNumbersCommand())
 program.addCommand(invitationsCommand())
 program.addCommand(agentsCommand())
+program.addCommand(callsCommand())
+program.addCommand(telegramCommand())
+program.addCommand(emailDomainsCommand())
 program.addCommand(addressesCommand())
 program.addCommand(documentsCommand())
 program.addCommand(exportsCommand())
@@ -94,8 +99,43 @@ program.addCommand(introspectCommand())
 
 // Singletons (no list/get pattern).
 program.addCommand(balanceCommand())
-program.addCommand(planCommand())
-program.addCommand(usageCommand())
+
+// Commander's built-in `help` takes a single command name, so
+// `zavu help agents create` silently printed the help for `agents` — the
+// parent — instead of for `create`. Two of the three conventions people try
+// worked (`agents create --help`, `agents help create`); this one lied.
+//
+// Walk the whole argument list down the command tree so every depth resolves,
+// and name the token that failed rather than falling back to the root help.
+program
+  .command("help [command...]")
+  .description("Show help for a command, e.g. `help agents create`.")
+  .action((path: string[] = []) => {
+    let cmd: Command = program
+    for (const name of path) {
+      const next = cmd.commands.find(
+        (c) => c.name() === name || c.aliases().includes(name)
+      )
+      if (!next) {
+        process.stderr.write(
+          `Unknown command "${name}"${cmd !== program ? ` under \`${cmd.name()}\`` : ""}.\n`
+        )
+        cmd.outputHelp()
+        process.exit(1)
+      }
+      cmd = next
+    }
+    cmd.outputHelp()
+  })
+
+// An unrecognised command printed the root help and exited 0 — so a typo, or a
+// quoted argument that never got split, looked like a successful run that
+// happened to print a lot. Say what was not understood and fail.
+program.on("command:*", (operands: string[]) => {
+  process.stderr.write(`Unknown command "${operands[0]}".\n`)
+  process.stderr.write(`Run \`${cli("--help")}\` to see the available commands.\n`)
+  process.exit(1)
+})
 
 program.parseAsync().catch((err) => {
   process.stderr.write(`Error: ${err instanceof Error ? err.message : String(err)}\n`)

@@ -25,6 +25,7 @@ export const phoneNumbersCommand = (): Command =>
         .option("--type <type>", "local | mobile | tollFree")
         .option("--contains <pattern>", "Search digits inside the number")
         .option("--limit <n>", "Max results", "10")
+        .option("--json", "Print the raw JSON response")
         .action(async (opts) => {
           const api = await apiFactory()
           try {
@@ -34,17 +35,35 @@ export const phoneNumbersCommand = (): Command =>
               contains: opts.contains,
               limit: opts.limit,
             })
+            if (opts.json) {
+              process.stdout.write(JSON.stringify(res, null, 2) + "\n")
+              return
+            }
             if (!res.items?.length) {
               ui.info("No numbers available.")
               return
+            }
+            // `$0` is a real, and very good, price — a free number must never
+            // render as "—". A truthiness check here showed every free number
+            // as "price unknown", which is the exact opposite of the truth and
+            // hides the cheapest way to start.
+            const price = (v: unknown) =>
+              typeof v === "number" ? (v === 0 ? "free" : `$${v}`) : "—"
+            // Which channels the number can carry decides whether it is any use
+            // at all — a voice agent on an SMS-only number simply never rings.
+            const caps = (c: Record<string, boolean> | undefined) => {
+              if (!c) return "—"
+              const on = Object.keys(c).filter((k) => c[k])
+              return on.length ? on.join(",") : "none"
             }
             ui.table(
               res.items.map((n) => ({
                 number: n.phoneNumber,
                 locality: n.locality ?? "—",
                 region: n.region ?? "—",
-                monthly: n.pricing?.monthlyPrice ? `$${n.pricing.monthlyPrice}` : "—",
-                upfront: n.pricing?.upfrontPrice ? `$${n.pricing.upfrontPrice}` : "—",
+                capabilities: caps(n.capabilities),
+                monthly: price(n.pricing?.monthlyPrice),
+                upfront: price(n.pricing?.upfrontPrice),
               }))
             )
           } catch (err) {

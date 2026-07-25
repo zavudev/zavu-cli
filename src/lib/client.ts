@@ -2,13 +2,15 @@
 // Throws a friendly "run zavu login" error if credentials are missing.
 
 import Zavudev from "@zavudev/sdk"
-import { readCredentials } from "./config"
+import { resolveCredentials } from "./config"
 import { fail } from "./ui"
 
 export async function buildClient(): Promise<Zavudev> {
-  const creds = await readCredentials()
+  const creds = await resolveCredentials()
   if (!creds?.apiKey) {
-    fail("Not logged in. Run `zavu login` first.")
+    fail(
+      "Not logged in. Run `zavu login`, or set ZAVUDEV_API_KEY for a non-interactive environment.",
+    )
   }
   return new Zavudev({
     apiKey: creds!.apiKey,

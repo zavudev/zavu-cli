@@ -10,7 +10,8 @@ import { writeFile, mkdir, access } from "node:fs/promises"
 import { join, basename, resolve } from "node:path"
 import { buildClient } from "../../lib/client"
 import { writeProjectConfig } from "../../lib/config"
-import { ui, fail, extractServerError } from "../../lib/ui"
+import { ui, fail, cli, extractServerError } from "../../lib/ui"
+import { writeTsconfig, RUNTIME_DEV_DEPENDENCY, SCAFFOLD_GITIGNORE } from "../../lib/scaffold"
 import { TEMPLATES } from "../../templates"
 
 interface InitOpts {
@@ -110,17 +111,18 @@ export function functionsInitCommand(): Command {
             private: true,
             type: "module",
             dependencies: template.dependencies,
+            // Provided by the layer in production; declared so the project is
+            // workable locally.
+            devDependencies: RUNTIME_DEV_DEPENDENCY,
           },
           null,
           2
         ),
         "utf8"
       )
-      await writeFile(
-        join(targetDir, ".gitignore"),
-        ["node_modules/", ".zavu/", "*.log"].join("\n") + "\n",
-        "utf8"
-      )
+      await writeFile(join(targetDir, ".gitignore"), SCAFFOLD_GITIGNORE, "utf8")
+      // Makes the project typecheck and run locally: without this the
+      await writeTsconfig(targetDir)
 
       await writeProjectConfig(
         { projectId: fnId.projectId, functionId: fnId.functionId, slug: fnId.slug, name },
@@ -133,18 +135,18 @@ export function functionsInitCommand(): Command {
         for (const s of template.requiredSecrets) {
           ui.hint(`${s.key}  — ${s.hint}`)
         }
-        ui.hint("Set them with `zavu fn secrets set <KEY> <value>` or via the dashboard.")
+        ui.hint(`Set them with \`${cli("fn secrets set <KEY> <value>")}\` or via the dashboard.`)
       }
 
       ui.info("\nNext steps:")
       ui.hint(`cd ${basename(targetDir)}`)
       if (template.requiredSecrets.length > 0) {
         for (const s of template.requiredSecrets) {
-          ui.hint(`zavu fn secrets set ${s.key} <value>`)
+          ui.hint(cli(`fn secrets set ${s.key} <value>`))
         }
       }
       ui.hint("# edit index.ts")
-      ui.hint("zavu deploy")
+      ui.hint(cli("deploy"))
     })
 }
 

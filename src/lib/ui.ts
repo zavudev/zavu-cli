@@ -18,10 +18,20 @@ function pickGlyph(): string {
   return SCRAMBLE_CHARS[Math.floor(Math.random() * SCRAMBLE_CHARS.length)]
 }
 
-function isInteractive(): boolean {
-  // Skip animations in CI / non-TTY (logs become unreadable). The `?? true`
-  // is for runtimes that don't expose isTTY (Bun in some contexts).
-  return (process.stdout.isTTY ?? true) && !process.env.CI && !process.env.ZAVU_NO_ANIMATE
+export function isInteractive(): boolean {
+  // Skip animations in CI / non-TTY: every frame is a separate write, so a
+  // pipe collects the whole animation instead of the final line.
+  //
+  // MUST be `=== true`. Node sets `isTTY` to *undefined* (not false) when
+  // stdout is a pipe, so an `?? true` fallback here turns the animation ON in
+  // exactly the case this guard exists to prevent — which is how CI logs, and
+  // every coding agent reading our output, ended up with ~80 lines of glyph
+  // soup before each real line.
+  return (
+    process.stdout.isTTY === true &&
+    !process.env.CI &&
+    !process.env.ZAVU_NO_ANIMATE
+  )
 }
 
 /**
@@ -103,6 +113,24 @@ export function brandIntro(subtitle?: string) {
     process.stdout.write("  " + kleur.gray(subtitle) + "\n")
   }
   process.stdout.write("\n")
+}
+
+// How this run was launched, so printed next-steps use a command that actually
+// works. Someone who ran `npx zavudev …` has no `zavu` on their PATH, so telling
+// them to run `zavu deploy` is a dead end; a global install does have `zavu`.
+// npx executes the package from its own cache dir (~/.npm/_npx/<hash>) and sets
+// npm_command=exec — either signal means we were invoked through npx.
+let cachedInvocation: string | undefined
+export function cli(rest = ""): string {
+  if (cachedInvocation === undefined) {
+    const entry = process.argv[1] ?? ""
+    const viaNpx =
+      entry.includes("/_npx/") ||
+      entry.includes("\\_npx\\") ||
+      process.env.npm_command === "exec"
+    cachedInvocation = viaNpx ? "npx zavudev" : "zavu"
+  }
+  return rest ? `${cachedInvocation} ${rest}` : cachedInvocation
 }
 
 export const ui = {

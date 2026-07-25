@@ -16,6 +16,7 @@
 //   --dashboard <url>      Override the dashboard origin (staging / self-host).
 
 import { Command } from "commander"
+import { createServer } from "node:http"
 import { hostname } from "node:os"
 import { spawn } from "node:child_process"
 import Zavudev from "@zavudev/sdk"
@@ -24,7 +25,7 @@ import {
   readCredentials,
   credentialsPath,
 } from "../lib/config"
-import { ui, fail } from "../lib/ui"
+import { ui, fail, cli } from "../lib/ui"
 
 // Defaults point at production, but env vars override so a developer running
 // the dashboard locally can do:
@@ -138,7 +139,7 @@ async function saveAndVerify(apiKey: string, baseUrl: string) {
     ui.hint(
       `Bound to project "${project ?? "?"}" (team "${team ?? "?"}", ${mode ?? "live"} key)`
     )
-    ui.hint("To switch projects: `zavu login` again and pick a different one.")
+    ui.hint(`To switch projects: \`${cli("login")}\` again and pick a different one.`)
   }
 }
 
@@ -151,73 +152,74 @@ async function startCallbackServerAndWait(
 ): Promise<{ token: string; apiBaseUrl?: string }> {
   return new Promise((resolve, reject) => {
     let timeoutHandle: ReturnType<typeof setTimeout> | undefined
-    const server = Bun.serve({
-      port: 0, // pick random
-      hostname: "127.0.0.1",
-      fetch(req) {
-        const url = new URL(req.url)
+    // node:http, not Bun.serve, so the CLI runs under Node via `npx zavu`.
+    const server = createServer((req, res) => {
+      const sendHtml = (status: number, html: string) => {
+        res.writeHead(status, { "content-type": "text/html; charset=utf-8" })
+        res.end(html)
+      }
+      const url = new URL(req.url ?? "/", "http://127.0.0.1")
 
-        if (url.pathname === "/" || url.pathname === "/health") {
-          return new Response("Zavu CLI listening", { status: 200 })
-        }
+      if (url.pathname === "/" || url.pathname === "/health") {
+        res.writeHead(200, { "content-type": "text/plain" })
+        res.end("Zavu CLI listening")
+        return
+      }
+      if (url.pathname !== "/callback") {
+        res.writeHead(404, { "content-type": "text/plain" })
+        res.end("Not found")
+        return
+      }
 
-        if (url.pathname !== "/callback") {
-          return new Response("Not found", { status: 404 })
-        }
+      const incomingState = url.searchParams.get("state")
+      const error = url.searchParams.get("error")
+      const token = url.searchParams.get("token")
+      const apiBaseUrl = url.searchParams.get("apiBaseUrl") ?? undefined
 
-        const incomingState = url.searchParams.get("state")
-        const error = url.searchParams.get("error")
-        const token = url.searchParams.get("token")
-        const apiBaseUrl = url.searchParams.get("apiBaseUrl") ?? undefined
-
-        if (error) {
-          finishErr(error)
-          return new Response(renderHtml(false, error), {
-            status: 400,
-            headers: { "content-type": "text/html; charset=utf-8" },
-          })
-        }
-        if (!token) {
-          finishErr("Missing token in callback")
-          return new Response(renderHtml(false, "Missing token"), {
-            status: 400,
-            headers: { "content-type": "text/html; charset=utf-8" },
-          })
-        }
-        if (incomingState !== state) {
-          finishErr("State mismatch — possible CSRF, ignoring")
-          return new Response(renderHtml(false, "State mismatch"), {
-            status: 400,
-            headers: { "content-type": "text/html; charset=utf-8" },
-          })
-        }
-        finishOk(token, apiBaseUrl)
-        return new Response(renderHtml(true), {
-          status: 200,
-          headers: { "content-type": "text/html; charset=utf-8" },
-        })
-      },
+      if (error) {
+        finishErr(error)
+        sendHtml(400, renderHtml(false, error))
+        return
+      }
+      if (!token) {
+        finishErr("Missing token in callback")
+        sendHtml(400, renderHtml(false, "Missing token"))
+        return
+      }
+      if (incomingState !== state) {
+        finishErr("State mismatch — possible CSRF, ignoring")
+        sendHtml(400, renderHtml(false, "State mismatch"))
+        return
+      }
+      finishOk(token, apiBaseUrl)
+      sendHtml(200, renderHtml(true))
     })
 
-    const port = server.port
-    const dashboardUrl = opts.dashboard.replace(/\/$/, "")
-    const callbackUrl = `http://127.0.0.1:${port}/callback`
-    const params = new URLSearchParams({
-      port: String(port),
-      state,
-      callback: callbackUrl,
-      label: `Zavu CLI on ${safeHostname()}`,
-    })
-    const authUrl = `${dashboardUrl}/cli-auth?${params.toString()}`
-
-    ui.info("Opening browser to authorize the CLI…")
-    ui.hint(`If your browser doesn't open, visit:\n  ${authUrl}`)
-
-    if (opts.browser !== false) {
-      openBrowser(authUrl).catch(() => {
-        ui.warn("Couldn't open the browser automatically. Open the URL above.")
+    server.on("error", (err) => finishErr(err.message))
+    // Port 0 → the OS assigns a free port. `address()` is only reliable once
+    // the server is actually listening, so open the browser from the callback.
+    server.listen(0, "127.0.0.1", () => {
+      const address = server.address()
+      const port = address && typeof address === "object" ? address.port : 0
+      const dashboardUrl = opts.dashboard.replace(/\/$/, "")
+      const callbackUrl = `http://127.0.0.1:${port}/callback`
+      const params = new URLSearchParams({
+        port: String(port),
+        state,
+        callback: callbackUrl,
+        label: `Zavu CLI on ${safeHostname()}`,
       })
-    }
+      const authUrl = `${dashboardUrl}/cli-auth?${params.toString()}`
+
+      ui.info("Opening browser to authorize the CLI…")
+      ui.hint(`If your browser doesn't open, visit:\n  ${authUrl}`)
+
+      if (opts.browser !== false) {
+        openBrowser(authUrl).catch(() => {
+          ui.warn("Couldn't open the browser automatically. Open the URL above.")
+        })
+      }
+    })
 
     timeoutHandle = setTimeout(() => {
       finishErr(`Timed out after ${Math.round(LOGIN_TIMEOUT_MS / 1000)}s`)
@@ -228,7 +230,7 @@ async function startCallbackServerAndWait(
       // Delay so the browser response actually flushes before the server dies.
       setTimeout(() => {
         try {
-          server.stop(true)
+          server.close()
         } catch {
           /* ignore */
         }

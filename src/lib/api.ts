@@ -6,7 +6,7 @@
 //
 // Use the SDK when it has the method (richer types). Use this when it doesn't.
 
-import { readCredentials } from "./config"
+import { resolveCredentials } from "./config"
 import { fail } from "./ui"
 
 export interface ApiClient {
@@ -17,10 +17,50 @@ export interface ApiClient {
   baseUrl: string
 }
 
+/**
+ * Render the per-field validation errors the API already sends back.
+ *
+ * Without this, a schema mistake surfaces as a bare "Invalid request body" and
+ * the developer is left guessing which field, while the response body was
+ * naming it exactly. That guessing was measured at roughly a third of a
+ * first-session's time, and it is the single cheapest thing to give back.
+ *
+ * Shape (see the API's `Error` schema): `details.errors[] = { path, message }`.
+ * Falls back to compact JSON so an unrecognised `details` still reaches the
+ * user instead of being dropped.
+ */
+export function formatErrorDetails(parsed: unknown): string {
+  const details = (parsed as any)?.details
+  if (!details) return ""
+
+  const errors = details.errors
+  // An empty `errors` array says nothing, and falling through to the JSON
+  // dump below would print a bare `{"errors":[]}` under the message.
+  if (Array.isArray(errors) && errors.length === 0) return ""
+  if (Array.isArray(errors)) {
+    const lines = errors.map((e: any) => {
+      const path = Array.isArray(e?.path) ? e.path.join(".") : e?.path
+      const message = e?.message ?? JSON.stringify(e)
+      return path ? `  ${path}: ${message}` : `  ${message}`
+    })
+    return `\n${lines.join("\n")}`
+  }
+
+  try {
+    const json = JSON.stringify(details)
+    // A blank object carries nothing; don't add a line for it.
+    return json && json !== "{}" ? `\n  ${json}` : ""
+  } catch {
+    return ""
+  }
+}
+
 export async function buildApi(): Promise<ApiClient> {
-  const creds = await readCredentials()
+  const creds = await resolveCredentials()
   if (!creds?.apiKey) {
-    fail("Not logged in. Run `zavu login` first.")
+    fail(
+      "Not logged in. Run `zavu login`, or set ZAVUDEV_API_KEY for a non-interactive environment.",
+    )
   }
   const apiKey = creds!.apiKey
   const baseUrl = creds!.apiBaseUrl.replace(/\/$/, "")
@@ -59,7 +99,7 @@ export async function buildApi(): Promise<ApiClient> {
         (parsed as any)?.error?.message ||
         `${res.status} ${res.statusText}`
       const code = (parsed as any)?.code ? ` [${(parsed as any).code}]` : ""
-      throw new Error(`${msg}${code}`)
+      throw new Error(`${msg}${code}${formatErrorDetails(parsed)}`)
     }
     return parsed as T
   }
