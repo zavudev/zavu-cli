@@ -13,7 +13,7 @@
 
 import { Command } from "commander"
 import { spawn } from "node:child_process"
-import { readFile, writeFile, mkdir, rm } from "node:fs/promises"
+import { readFile, writeFile, mkdir, rm, stat } from "node:fs/promises"
 import { join, dirname, resolve } from "node:path"
 import { tmpdir } from "node:os"
 import { randomBytes } from "node:crypto"
@@ -277,6 +277,20 @@ try {
         ZAVU_FUNCTION_SLUG: config?.slug ?? "local",
         ZAVU_API_KEY: opts.live && creds?.apiKey ? creds.apiKey : "stub",
         ZAVU_API_BASE_URL: creds?.apiBaseUrl ?? "https://api.zavu.dev",
+      }
+
+      // The runner imports the user's source, which imports @zavudev/functions.
+      // If deps were never installed, Bun fails with a raw
+      // "Cannot find module '@zavudev/functions'" on its own stderr — which we
+      // cannot rewrite, since the child inherits stdio. So check first and say
+      // the one thing that actually fixes it.
+      try {
+        await stat(join(projectDir, "node_modules", "@zavudev", "functions"))
+      } catch {
+        ui.warn("Dependencies are not installed in this project.")
+        ui.hint(`Run \`npm install\` in ${projectDir}, then try again.`)
+        ui.hint("(Deploy does not need it; local invoke and tsc do.)")
+        process.exit(2)
       }
 
       const label = toolMode

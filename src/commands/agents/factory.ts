@@ -90,19 +90,34 @@ export function attachFactoryCommands(parent: Command): void {
       "--calendar <provider>",
       "For booking agents: webhook (default) or calcom for a working Cal.com client"
     )
+    // A booking agent whose handlers post to a webhook needs somewhere to post
+    // to. Without this the only way to expose the function was the dashboard,
+    // which broke the full-CLI chain at exactly the step that agent needed.
+    .option(
+      "--http",
+      "Expose the function on a public HTTPS URL (for webhooks and tool endpoints)"
+    )
     .action(
-      async (id: string, opts: { dir?: string; sender?: string; calendar?: string }) => {
+      async (
+        id: string,
+        opts: { dir?: string; sender?: string; calendar?: string; http?: boolean }
+      ) => {
       const api = await buildApi()
 
-      const { targetDir, template, senderSet } = await scaffoldTemplate(
+      const { targetDir, template, senderSet, publicUrl } = await scaffoldTemplate(
         api,
         id,
         opts.dir,
         opts.sender,
-        opts.calendar
+        opts.calendar,
+        opts.http
       )
 
       await ui.scrambleSuccess(`Pulled "${template.name}".`)
+      if (opts.http) {
+        if (publicUrl) ui.info(`Public URL: ${publicUrl}`)
+        else ui.hint("HTTP enabled — the public URL appears after your first deploy.")
+      }
 
       // 6. Next steps — mirror the Functions quickstart.
       ui.info("\nNext steps:")
@@ -207,8 +222,14 @@ async function scaffoldTemplate(
   id: string,
   dirOpt: string | undefined,
   sender: string | undefined,
-  calendar?: string
-): Promise<{ targetDir: string; template: RenderedTemplate; senderSet: boolean }> {
+  calendar?: string,
+  httpEnabled?: boolean
+): Promise<{
+  targetDir: string
+  template: RenderedTemplate
+  senderSet: boolean
+  publicUrl: string | null
+}> {
   let template: RenderedTemplate
   try {
     const res = await api.get<{ template: RenderedTemplate }>(
@@ -239,6 +260,7 @@ async function scaffoldTemplate(
     slug: template.defaultSlug,
     sourceCode: index!.content,
     dependencies: template.dependencies ?? {},
+    httpEnabled,
   })
   if (registered.slug !== template.defaultSlug) {
     ui.warn(`Slug "${template.defaultSlug}" was taken — used "${registered.slug}".`)
@@ -293,7 +315,7 @@ async function scaffoldTemplate(
     else ui.warn("Could not set SENDER_ID automatically — set it manually below.")
   }
 
-  return { targetDir, template, senderSet }
+  return { targetDir, template, senderSet, publicUrl: registered.publicUrl }
 }
 
 // Guided, channel-first sender setup. Offers existing senders, or sets up a new
@@ -490,23 +512,34 @@ async function registerFunction(
     slug: string
     sourceCode: string
     dependencies: Record<string, string>
+    httpEnabled?: boolean
   }
-): Promise<{ functionId: string; slug: string; projectId: string }> {
+): Promise<{
+  functionId: string
+  slug: string
+  projectId: string
+  publicUrl: string | null
+}> {
   let candidate = args.slug
   for (let attempt = 1; attempt <= MAX_SLUG_ATTEMPTS; attempt++) {
     try {
-      const res = await api.post<{ function?: { id: string; slug: string } }>(
-        "/v1/functions",
-        {
-          name: args.name,
-          slug: candidate,
-          sourceCode: args.sourceCode,
-          dependencies: args.dependencies,
-        }
-      )
+      const res = await api.post<{
+        function?: { id: string; slug: string; publicUrl?: string | null }
+      }>("/v1/functions", {
+        name: args.name,
+        slug: candidate,
+        sourceCode: args.sourceCode,
+        dependencies: args.dependencies,
+        ...(args.httpEnabled ? { httpEnabled: true } : {}),
+      })
       const fn = res.function
       if (!fn?.id) fail("Server returned a malformed function payload.")
-      return { functionId: fn!.id, slug: fn!.slug, projectId: "" }
+      return {
+        functionId: fn!.id,
+        slug: fn!.slug,
+        projectId: "",
+        publicUrl: fn!.publicUrl ?? null,
+      }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
       const isSlugConflict = /already exists/i.test(msg) && /slug/i.test(msg)
@@ -518,7 +551,7 @@ async function registerFunction(
     }
   }
   // Unreachable — the loop either returns or fails.
-  return { functionId: "", slug: args.slug, projectId: "" }
+  return { functionId: "", slug: args.slug, projectId: "", publicUrl: null }
 }
 
 // Append a `-N` suffix, trimming so the slug stays within the 23-char budget

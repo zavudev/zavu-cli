@@ -20,6 +20,7 @@ interface InitOpts {
   slug?: string
   dir?: string
   yes?: boolean
+  http?: boolean
 }
 
 export function functionsInitCommand(): Command {
@@ -30,6 +31,10 @@ export function functionsInitCommand(): Command {
     .option("--slug <slug>", "URL slug (lowercase, hyphenated)")
     .option("--dir <path>", "Directory to scaffold into (defaults to ./<slug>)")
     .option("-y, --yes", "Accept defaults, no prompts")
+    .option(
+      "--http",
+      "Expose the function on a public HTTPS URL (for webhooks and tool endpoints)"
+    )
     .action(async (opts: InitOpts) => {
       const client = await buildClient()
 
@@ -89,7 +94,12 @@ export function functionsInitCommand(): Command {
       // The CLI uses the SDK's `messages` resource as one example of API
       // access; here we use a direct call until the SDK has a `functions`
       // resource. For now we error out cleanly if the API method isn't there.
-      const fnId = await registerFunction(client, { name, slug, template })
+      const fnId = await registerFunction(client, {
+        name,
+        slug,
+        template,
+        httpEnabled: opts.http,
+      })
       if (fnId.slug !== slug) {
         ui.warn(`Slug "${slug}" was taken — used "${fnId.slug}" instead.`)
       }
@@ -137,6 +147,15 @@ export function functionsInitCommand(): Command {
       )
 
       await ui.scrambleSuccess(`Function "${name}" created.`)
+      if (opts.http) {
+        // The URL only exists once something is deployed behind it, so say so
+        // rather than printing an empty field and letting the caller wonder.
+        if (fnId.publicUrl) {
+          ui.info(`Public URL: ${fnId.publicUrl}`)
+        } else {
+          ui.hint("HTTP enabled — the public URL appears after your first deploy.")
+        }
+      }
       if (template.requiredSecrets.length > 0) {
         ui.info("This template needs the following secrets before its first deploy:")
         for (const s of template.requiredSecrets) {
@@ -213,8 +232,18 @@ const MAX_SLUG_ATTEMPTS = 25
 
 async function registerFunction(
   client: import("@zavudev/sdk").default,
-  args: { name: string; slug: string; template: typeof TEMPLATES[number] }
-): Promise<{ projectId: string; functionId: string; slug: string }> {
+  args: {
+    name: string
+    slug: string
+    template: typeof TEMPLATES[number]
+    httpEnabled?: boolean
+  }
+): Promise<{
+  projectId: string
+  functionId: string
+  slug: string
+  publicUrl: string | null
+}> {
   let attempt = 0
   let candidateSlug = args.slug
   while (true) {
@@ -230,12 +259,17 @@ async function registerFunction(
         slug: candidateSlug,
         sourceCode: args.template.code,
         dependencies: args.template.dependencies,
+        // Only sent when asked for. `POST /v1/functions` already accepts it, so
+        // exposing a function over HTTP no longer requires a trip to the
+        // dashboard — which was the last step in the flow you could not do from
+        // a terminal.
+        ...(args.httpEnabled ? { httpEnabled: true } : {}),
       }),
     })
 
     if (res.ok) {
       const json = (await res.json()) as {
-        function?: { id: string; slug: string }
+        function?: { id: string; slug: string; publicUrl?: string | null }
       }
       const fn = json.function
       if (!fn?.id) {
@@ -245,6 +279,7 @@ async function registerFunction(
         projectId: "", // not surfaced by /v1/functions yet — implicit from the API key
         functionId: fn!.id,
         slug: fn!.slug,
+        publicUrl: fn!.publicUrl ?? null,
       }
     }
 
