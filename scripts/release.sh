@@ -114,11 +114,41 @@ else
   git commit -m "chore(cli): release v${VERSION}"
 fi
 
+# Push the branch BEFORE tagging, retrying on top of whatever landed meanwhile.
+#
+# Building five platform binaries takes long enough that a human push can land
+# in between, and a bare `git push` then fails with "fetch first". Under
+# `set -e` that aborted the whole script: no tag, no GitHub release, no
+# Homebrew update — while the version bump commit stayed local and was lost.
+# The visible symptom was a version that kept climbing in git while npm sat
+# still, which read as "the release pipeline is fine, someone forgot to
+# publish".
+#
+# The bump commit only touches package.json's version line, so rebasing it onto
+# new work is safe: a conflict here means something else bumped the version
+# too, which is a real problem and should stop the release.
+echo "[release] pushing version bump to source repo..."
+for attempt in 1 2 3; do
+  if git push origin HEAD; then
+    break
+  fi
+  if [ "$attempt" = "3" ]; then
+    echo "[release] push still rejected after 3 attempts; giving up." >&2
+    exit 1
+  fi
+  echo "[release] main moved; rebasing and retrying (${attempt}/3)..."
+  git fetch origin main
+  if ! git rebase origin/main; then
+    git rebase --abort || true
+    echo "[release] rebase conflicted — another commit changed the version. Resolve manually." >&2
+    exit 1
+  fi
+done
+
+# Tagged only once the commit is actually on the remote: tagging first meant a
+# rebase left the tag pointing at an orphaned SHA.
 echo "[release] tagging $TAG in the source repo..."
 git tag -a "$TAG" -m "Zavu CLI v${VERSION}"
-
-echo "[release] pushing commit + tag to source repo..."
-git push origin HEAD
 git push origin "$TAG"
 
 echo "[release] creating GitHub release on $RELEASE_REPO..."
