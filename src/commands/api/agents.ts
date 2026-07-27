@@ -5,7 +5,7 @@
 import { Command } from "commander"
 import { buildApi } from "../../lib/api"
 import { loadJsonBody } from "../../lib/resource"
-import { ui, fail } from "../../lib/ui"
+import { ui, fail, cli } from "../../lib/ui"
 import { attachFactoryCommands } from "../agents/factory"
 
 function agentBase(senderId: string) {
@@ -345,6 +345,7 @@ export function agentsCommand(): Command {
 
   cmd
     .command("stats")
+    .description("Messaging stats for an agent. Voice calls are not counted; see `calls list`.")
     .requiredOption("--sender <senderId>", "Sender ID")
     .action(async (opts) => {
       const api = await buildApi()
@@ -362,7 +363,9 @@ export function agentsCommand(): Command {
   // (no subcommand) and treat it as `list`.
   const executions = cmd
     .command("executions")
-    .description("Agent execution history (list / get single).")
+    .description(
+      "Agent execution history for messaging (list / get single). Voice calls are recorded as calls, not executions."
+    )
 
   executions
     .command("list", { isDefault: true })
@@ -380,6 +383,11 @@ export function agentsCommand(): Command {
         })
         if (!res.items?.length) {
           ui.info("No executions.")
+          // An execution is one inbound message answered by the agent. Voice
+          // calls are multi-turn and are recorded as calls instead, so a
+          // voice-only agent reads as "never ran" here no matter how many calls
+          // it handled. Said at the point of confusion, not just in the docs.
+          ui.hint(`Voice calls are not executions. For phone activity: ${cli("calls list")}`)
           return
         }
         if (opts.json) {
