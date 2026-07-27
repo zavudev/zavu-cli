@@ -64,7 +64,56 @@ async function buildAgentBodyFromFlags(
   if (opts.enabled !== undefined) {
     body.enabled = opts.enabled === "true" || opts.enabled === true
   }
+
+  // The API has accepted a `voice` object on create since voice agents shipped;
+  // the CLI just never sent one, so an agent built from the terminal could not
+  // be given a voice at all. commander maps --no-voice to voice === false.
+  const voice = buildVoiceConfig(opts)
+  if (voice) body.voice = voice
+
   return body
+}
+
+/**
+ * The `voice` object, or undefined when no voice flag was passed.
+ *
+ * A bare --voice-greeting without --voice would otherwise be silently dropped,
+ * so any voice flag implies the channel is wanted.
+ */
+function buildVoiceConfig(opts: Record<string, any>): Record<string, unknown> | undefined {
+  const detail =
+    opts.voiceGreeting || opts.voiceLanguage || opts.voiceId || opts.voiceTransferTo
+
+  if (opts.voice === false) return { enabled: false }
+  if (!opts.voice && !detail) return undefined
+
+  const voice: Record<string, unknown> = { enabled: true }
+  if (opts.voiceGreeting) voice.greeting = opts.voiceGreeting
+  if (opts.voiceLanguage) voice.language = opts.voiceLanguage
+  if (opts.voiceId) voice.ttsVoiceId = opts.voiceId
+  if (opts.voiceTransferTo) voice.transferPhoneNumber = opts.voiceTransferTo
+  return voice
+}
+
+/**
+ * Warn when the agent can talk but the sender it answers on cannot.
+ *
+ * Best-effort: a failure to read the sender must not fail an agent that was
+ * created successfully.
+ */
+async function warnIfSenderCannotSpeak(api: any, senderId: string): Promise<void> {
+  try {
+    const sender = (await api.get(`/v1/senders/${senderId}`)) as { channels?: string[] }
+    if (sender?.channels && !sender.channels.includes("voice")) {
+      ui.warn(
+        `This agent has a voice, but sender ${senderId} cannot take calls yet ` +
+          `(channels: ${sender.channels.join(", ") || "none"}). ` +
+          `Enable it with ${cli(`senders update ${senderId} --enable-voice`)}.`
+      )
+    }
+  } catch {
+    // Ignored on purpose: the agent exists either way.
+  }
 }
 
 export function agentsCommand(): Command {
@@ -271,6 +320,11 @@ export function agentsCommand(): Command {
       "text"
     )
     .option("--enabled <bool>", "Answer real messages right away. Default false.")
+    .option("--voice", "Let this agent answer and place phone calls")
+    .option("--voice-greeting <text>", "Opening line when a call connects")
+    .option("--voice-language <code>", "BCP-47 tag (en, es, pt-BR), or 'auto' to follow the caller")
+    .option("--voice-id <id>", "Synthesized voice. List them with `agents voices`.")
+    .option("--voice-transfer-to <e164>", "Number the agent can hand the call to")
     .option("--data <json>", "Full JSON body (advanced)")
     .option("--file <path>", "Path to a JSON body file (advanced)")
     .action(async (opts) => {
@@ -293,6 +347,13 @@ export function agentsCommand(): Command {
             "Created disabled: it will not answer real messages yet. Turn it on with `agents update --sender <id> --enabled true`."
           )
         }
+        // A voice agent on a sender whose voice channel is off is exactly the
+        // half-built resource these QA rounds kept finding: it looks configured
+        // and never rings. `channels` is computed, so this is the real state.
+        const voiceCfg = (body as Record<string, any>).voice as { enabled?: boolean } | undefined
+        if (voiceCfg?.enabled) {
+          await warnIfSenderCannotSpeak(api, opts.sender)
+        }
         process.stdout.write(JSON.stringify(res, null, 2) + "\n")
       } catch (err) {
         fail(err instanceof Error ? err.message : String(err))
@@ -313,6 +374,12 @@ export function agentsCommand(): Command {
     .option("--context-window <n>")
     .option("--channels <list>")
     .option("--message-types <list>")
+    .option("--voice", "Let this agent answer and place phone calls")
+    .option("--no-voice", "Stop this agent taking calls")
+    .option("--voice-greeting <text>")
+    .option("--voice-language <code>")
+    .option("--voice-id <id>")
+    .option("--voice-transfer-to <e164>")
     .option("--data <json>", "Full JSON body (advanced)")
     .option("--file <path>", "Path to a JSON body file (advanced)")
     .action(async (opts) => {
@@ -338,6 +405,38 @@ export function agentsCommand(): Command {
       try {
         await api.del(agentBase(opts.sender))
         ui.success("Deleted.")
+      } catch (err) {
+        fail(err instanceof Error ? err.message : String(err))
+      }
+    })
+
+  // Referenced by `--voice-id` on create/update. Without it the only way to
+  // learn a valid id was to open the dashboard and read a dropdown.
+  cmd
+    .command("voices")
+    .description("List the voices an agent can speak with.")
+    .option("--language <code>", "Only voices for this language (en, es, pt-BR...)")
+    .option("--json", "Print the raw JSON response")
+    .action(async (opts) => {
+      const api = await buildApi()
+      try {
+        const res = (await api.get("/v1/agents/voices", {
+          language: opts.language,
+        })) as { items?: Array<{ id: string; name: string; language: string }>; languages?: string[] }
+
+        if (opts.json) {
+          process.stdout.write(JSON.stringify(res, null, 2) + "\n")
+          return
+        }
+        if (!res.items?.length) {
+          ui.info(`No voices for language "${opts.language}".`)
+          if (res.languages?.length) ui.hint(`Available: ${res.languages.join(", ")}`)
+          return
+        }
+        for (const v of res.items) {
+          process.stdout.write(`${v.language.padEnd(6)} ${v.name.padEnd(12)} ${v.id}\n`)
+        }
+        ui.hint(`Use one with ${cli("agents create --voice --voice-id <id>")}`)
       } catch (err) {
         fail(err instanceof Error ? err.message : String(err))
       }

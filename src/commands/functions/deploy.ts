@@ -137,9 +137,15 @@ export function functionsDeployCommand(): Command {
           // a second agent shadowing the first, a manifest probe that threw —
           // are precisely the ones that make a "successful" deploy a lie.
           printReconcileSummary(d.reconcileSummary, d.reconcileWarning)
-          await ui.scrambleSuccess(
-            `Deployed in ${((Date.now() - startedAt) / 1000).toFixed(1)}s`
-          )
+          const elapsed = `${((Date.now() - startedAt) / 1000).toFixed(1)}s`
+          // A green ✓ between the error above and the warning below read as a
+          // clean deploy that happened to print something. The tick is only
+          // earned when everything in the source actually synced.
+          if (d.reconcileWarning) {
+            ui.warn(`Deployed with errors in ${elapsed}.`)
+          } else {
+            await ui.scrambleSuccess(`Deployed in ${elapsed}`)
+          }
           // The URL lives on the server, not in .zavu/config.json — which is
           // written at scaffold time and never carries it. Reading the local
           // file meant this line could not fire, so `--http` produced an
@@ -161,7 +167,7 @@ export function functionsDeployCommand(): Command {
           // read that as success.
           if (d.reconcileWarning) {
             ui.warn(
-              "Deployed, but the declarations in your source were NOT synced. Fix the error above and deploy again."
+              "The declarations in your source were NOT synced. The function is live, but its agents and tools are unchanged. Fix the error above and deploy again."
             )
             process.exitCode = 1
           }

@@ -4,7 +4,7 @@
 import { Command } from "commander"
 import { buildClient } from "../../lib/client"
 import { readProjectConfig } from "../../lib/config"
-import { ui, fail } from "../../lib/ui"
+import { ui, fail, cli } from "../../lib/ui"
 
 interface LogsOpts {
   tail?: boolean
@@ -102,6 +102,12 @@ export function functionsLogsCommand(): Command {
             // Reset to fast polling on activity; double on idle until the cap.
             pollMs = printed > 0 ? POLL_MIN_MS : Math.min(pollMs * 2, POLL_MAX_MS)
             await sleep(pollMs)
+          } else if (printed === 0) {
+            // Printing nothing and exiting 0 is indistinguishable from a broken
+            // command. Say which window was searched, since the usual cause is
+            // that the function simply has not run inside it.
+            ui.info(`No logs in the last ${opts.since}.`)
+            ui.hint(`Widen it with ${cli("fn logs --since 24h")}, or follow live with ${cli("fn logs --tail")}.`)
           }
         } while (opts.tail && !interrupted)
       } finally {

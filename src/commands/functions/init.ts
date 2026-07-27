@@ -6,7 +6,7 @@
 
 import { Command } from "commander"
 import prompts from "prompts"
-import { writeFile, mkdir, access } from "node:fs/promises"
+import { writeFile, mkdir, readdir } from "node:fs/promises"
 import { join, basename, resolve } from "node:path"
 import { buildClient } from "../../lib/client"
 import { writeProjectConfig } from "../../lib/config"
@@ -86,8 +86,8 @@ export function functionsInitCommand(): Command {
       // when --dir wasn't supplied. The existence check still runs before
       // registration so we don't overwrite local work.
       const initialTargetDir = resolve(opts.dir ?? slug)
-      if (await pathExists(initialTargetDir)) {
-        fail(`Directory ${initialTargetDir} already exists. Pass --dir <other> or remove it first.`)
+      if (await dirHasContents(initialTargetDir)) {
+        fail(`Directory ${initialTargetDir} is not empty. Pass --dir <other> or clear it first.`)
       }
 
       ui.step(`Creating function "${name}" in your Zavu project…`)
@@ -107,8 +107,8 @@ export function functionsInitCommand(): Command {
       // Re-resolve the target dir against the actual slug we got. If --dir
       // was explicit, honor that; otherwise follow the (possibly bumped) slug.
       const targetDir = opts.dir ? resolve(opts.dir) : resolve(fnId.slug)
-      if (targetDir !== initialTargetDir && (await pathExists(targetDir))) {
-        fail(`Directory ${targetDir} already exists. Pass --dir <other> or remove it first.`)
+      if (targetDir !== initialTargetDir && (await dirHasContents(targetDir))) {
+        fail(`Directory ${targetDir} is not empty. Pass --dir <other> or clear it first.`)
       }
       ui.step(`Writing files to ${targetDir}…`)
       await mkdir(targetDir, { recursive: true })
@@ -210,12 +210,22 @@ function slugify(name: string): string {
     .replace(/-+$/g, "")
 }
 
-async function pathExists(path: string): Promise<boolean> {
+/**
+ * True when the path exists and holds something.
+ *
+ * `mkdir my-agent && cd my-agent && zavu init` is the normal way to start, and
+ * refusing merely because the directory exists turned that into an error for a
+ * folder with nothing to overwrite. Only real contents are a reason to stop.
+ */
+async function dirHasContents(path: string): Promise<boolean> {
   try {
-    await access(path)
+    const entries = await readdir(path)
+    return entries.length > 0
+  } catch (err) {
+    // ENOENT: nothing there, which is fine. ENOTDIR: a file sits in the way,
+    // and that is a genuine collision.
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return false
     return true
-  } catch {
-    return false
   }
 }
 

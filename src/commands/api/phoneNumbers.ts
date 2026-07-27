@@ -24,6 +24,7 @@ export const phoneNumbersCommand = (): Command =>
         .requiredOption("--country <iso>", "Two-letter ISO country code (e.g. US)")
         .option("--type <type>", "local | mobile | tollFree")
         .option("--contains <pattern>", "Search digits inside the number")
+        .option("--capabilities <list>", "Only numbers with all of these: sms, voice, mms")
         .option("--limit <n>", "Max results", "10")
         .option("--json", "Print the raw JSON response")
         .action(async (opts) => {
@@ -33,6 +34,7 @@ export const phoneNumbersCommand = (): Command =>
               countryCode: opts.country,
               type: opts.type,
               contains: opts.contains,
+              capabilities: opts.capabilities,
               limit: opts.limit,
             })
             if (opts.json) {

@@ -14,6 +14,10 @@ function buildSenderBody(opts: Record<string, any>): Record<string, unknown> {
   if (opts.phone) body.phoneNumber = opts.phone
   if (opts.email) body.emailAddress = opts.email
   if (opts.emailFromName) body.emailFromName = opts.emailFromName
+  if (opts.enableVoice) {
+    if (!opts.phone) fail("`--enable-voice` needs `--phone`: a sender with no number cannot take calls.")
+    body.enableVoice = true
+  }
   if (opts.setDefault) body.setAsDefault = true
   if (opts.webhookUrl) body.webhookUrl = opts.webhookUrl
   if (opts.webhookEvents) {
@@ -21,6 +25,19 @@ function buildSenderBody(opts: Record<string, any>): Record<string, unknown> {
       .split(",")
       .map((s) => s.trim())
       .filter(Boolean)
+  }
+  return body
+}
+
+/** Update body from flags. Voice used to be reachable only from the dashboard. */
+function buildSenderUpdateBody(opts: Record<string, any>): Record<string, unknown> {
+  const body: Record<string, unknown> = {}
+  if (opts.name) body.name = opts.name
+  if (opts.enableVoice) body.enableVoice = true
+  if (opts.disableVoice) body.enableVoice = false
+  if (opts.setDefault) body.setAsDefault = true
+  if (Object.keys(body).length === 0) {
+    fail("Nothing to update. Pass --name, --enable-voice, --disable-voice, --set-default, or --data/--file.")
   }
   return body
 }
@@ -49,7 +66,8 @@ export const sendersCommand = (): Command =>
         .command("create")
         .description("Create a sender. Use --name + --phone and/or --email, or --data/--file.")
         .option("--name <name>", "Display name")
-        .option("--phone <e164>", "Phone number in E.164 (SMS / WhatsApp / voice)")
+        .option("--phone <e164>", "A number this project owns, in E.164. Routed to the sender so its channels work.")
+        .option("--enable-voice", "Let this sender place and answer calls. Requires --phone.")
         .option("--email <address>", "From-address for the email channel (domain must be verified)")
         .option("--email-from-name <name>", "Display name shown in the recipient's inbox")
         .option("--set-default", "Make this the project's default sender")
@@ -72,11 +90,19 @@ export const sendersCommand = (): Command =>
 
       cmd
         .command("update <senderId>")
-        .description("Update a sender (--data '{...}' or --file <path>).")
+        .description("Update a sender. Use --name / --enable-voice / --disable-voice, or --data/--file.")
+        .option("--name <name>", "Rename the sender")
+        .option("--enable-voice", "Let this sender place and answer calls")
+        .option("--disable-voice", "Stop this sender taking calls")
+        .option("--set-default", "Make this the project's default sender")
         .option("--data <json>", "Inline JSON body")
         .option("--file <path>", "Path to a JSON file")
         .action(async (id, opts) => {
-          const body = await loadJsonBody(opts)
+          if (opts.enableVoice && opts.disableVoice) {
+            fail("Pass either --enable-voice or --disable-voice, not both.")
+          }
+          const body =
+            opts.data || opts.file ? await loadJsonBody(opts) : buildSenderUpdateBody(opts)
           const api = await apiFactory()
           try {
             const res = await api.patch(`/v1/senders/${id}`, body)
