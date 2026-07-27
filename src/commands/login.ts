@@ -230,6 +230,22 @@ async function startCallbackServerAndWait(
       // Delay so the browser response actually flushes before the server dies.
       setTimeout(() => {
         try {
+          // `close()` only stops NEW connections. The browser holds the
+          // callback socket open with keep-alive, and that live handle keeps
+          // Node's event loop alive — so login printed "✓ Logged in." and then
+          // sat there until the socket timed out, looking hung.
+          //
+          // Guarded because closeAllConnections landed in Node 18.2; on older
+          // 18.x we fall back to unref, which lets the process exit while the
+          // socket lingers harmlessly.
+          const anyServer = server as unknown as {
+            closeAllConnections?: () => void
+          }
+          if (typeof anyServer.closeAllConnections === "function") {
+            anyServer.closeAllConnections()
+          } else {
+            server.unref()
+          }
           server.close()
         } catch {
           /* ignore */
