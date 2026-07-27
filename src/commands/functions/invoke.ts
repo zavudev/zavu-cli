@@ -164,6 +164,50 @@ if (!tool) {
   console.error("  available tools:", registry.tools.map((t: any) => t.name).join(", ") || "(none)")
   process.exit(2)
 }
+// Validate against the schema the tool itself declares, before calling it.
+//
+// Without this, \`fn invoke --tool qualify_lead --args '{}'\` ran the handler
+// with every field undefined and printed a green \`ok: true\` full of the string
+// "undefined". The whole point of this command is to verify a handler works, so
+// a pass that only proves "it did not throw" is worse than no check at all —
+// especially for an agent that treats exit 0 as confirmation.
+//
+// The model is given the same JSON Schema at runtime and will not call a tool
+// with a required field missing, so failing here matches production rather than
+// being stricter than it.
+const schema = tool.parameters
+if (schema && typeof schema === "object") {
+  const props = (schema.properties ?? {}) as Record<string, { type?: string }>
+  const required = (schema.required ?? []) as string[]
+  const problems: string[] = []
+
+  for (const key of required) {
+    if (toolArgs[key] === undefined) problems.push(\`missing required "\${key}"\`)
+  }
+  for (const [key, value] of Object.entries(toolArgs)) {
+    if (!props[key]) {
+      problems.push(\`unknown argument "\${key}"\`)
+      continue
+    }
+    const want = props[key].type
+    if (!want || value === null) continue
+    const got = Array.isArray(value) ? "array" : typeof value
+    // JSON Schema's "integer" has no JS typeof; treat it as a number check.
+    const ok = want === "integer" ? Number.isInteger(value) : got === want
+    if (!ok) problems.push(\`"\${key}" should be \${want}, got \${got}\`)
+  }
+
+  if (problems.length > 0) {
+    console.error("✗ arguments do not match the tool's schema:")
+    for (const p of problems) console.error("   • " + p)
+    const shape = Object.entries(props)
+      .map(([k, v]) => \`\${k}: \${v.type ?? "any"}\${required.includes(k) ? "" : "?"}\`)
+      .join(", ")
+    console.error("  expected: { " + shape + " }")
+    process.exit(2)
+  }
+}
+
 console.log("→ invoking tool:", toolName)
 console.log("  args:", JSON.stringify(toolArgs))
 const start = Date.now()
@@ -213,6 +257,7 @@ try {
         ? `tool:${opts.tool}`
         : `event:${opts.event}`
       ui.step(`Invoking ${config?.slug ?? "local"} → ${label} (${opts.live ? "LIVE" : "mock"})`)
+      let exitCode = 0
       try {
         await new Promise<void>((resolve, reject) => {
           const child = spawn("bun", ["run", runnerPath], {
@@ -234,12 +279,28 @@ try {
             }
             reject(err)
           })
-          child.on("exit", (code) => (code === 0 ? resolve() : reject(new Error(`exit ${code}`))))
+          // Carry the runner's own code instead of collapsing every failure to
+          // 1. The runner distinguishes them — 2 means "you called it wrong"
+          // (unknown tool, arguments that do not match the schema), 1 means the
+          // handler itself threw — and a caller that retries on 1 but reports on
+          // 2 loses that for free otherwise.
+          child.on("exit", (code) => {
+            if (code === 0) return resolve()
+            const err = new Error(`exit ${code}`) as Error & { exitCode?: number }
+            err.exitCode = code ?? 1
+            reject(err)
+          })
         })
+      } catch (err) {
+        // Rethrown after the finally below runs, so the generated runner is
+        // still cleaned up on the failure path.
+        exitCode = (err as { exitCode?: number }).exitCode ?? 1
+        if (exitCode === 1) throw err
       } finally {
         // Only the generated runner — `.zavu/` also holds config.json and the
         // local runtime stand-in.
         await rm(runnerPath, { force: true })
       }
+      if (exitCode !== 0) process.exit(exitCode)
     })
 }

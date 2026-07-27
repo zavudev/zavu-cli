@@ -30,7 +30,16 @@ export function functionsDeleteCommand(): Command {
       "[functionId]",
       "Function ID to delete. Defaults to the function in .zavu/config.json."
     )
-    .action(async (functionIdArg?: string) => {
+    // Typing the slug back is the right gate for a person at a terminal, but it
+    // also meant a script or an agent could create a function and then have no
+    // way to clean it up. `--confirm <slug>` is the same assertion made ahead of
+    // time: you still have to name the thing, so a wrong cwd or a stale id fails
+    // exactly as loudly as it does interactively.
+    .option(
+      "--confirm <slug>",
+      "Skip the prompt by asserting the slug up front (for scripts and agents)."
+    )
+    .action(async (functionIdArg: string | undefined, opts: { confirm?: string }) => {
       const target = await resolveTarget(functionIdArg)
       const client = await buildClient()
 
@@ -43,17 +52,22 @@ export function functionsDeleteCommand(): Command {
 
       // Require typing the slug back. `prompts` returns `undefined` on Ctrl-C,
       // which we treat as a cancel.
-      const res = await prompts({
-        type: "text",
-        name: "confirm",
-        message: `Type "${target.slug}" to confirm:`,
-      })
-      if (!res.confirm) {
+      const provided =
+        opts.confirm ??
+        (
+          await prompts({
+            type: "text",
+            name: "confirm",
+            message: `Type "${target.slug}" to confirm:`,
+          })
+        ).confirm
+
+      if (!provided) {
         ui.info("Cancelled.")
         return
       }
-      if (res.confirm !== target.slug) {
-        fail(`Confirmation didn't match. Expected "${target.slug}", got "${res.confirm}".`)
+      if (provided !== target.slug) {
+        fail(`Confirmation didn't match. Expected "${target.slug}", got "${provided}".`)
       }
 
       const httpRes = await fetch(
