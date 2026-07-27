@@ -18,6 +18,7 @@ import { join, dirname, resolve } from "node:path"
 import { tmpdir } from "node:os"
 import { randomBytes } from "node:crypto"
 import { readProjectConfig, readCredentials } from "../../lib/config"
+import { buildApi } from "../../lib/api"
 import { ui, fail } from "../../lib/ui"
 
 interface InvokeOpts {
@@ -269,9 +270,22 @@ try {
 `
       await writeFile(runnerPath, runnerSource, "utf8")
 
-      // Inject the same env vars the deployed Lambda would see.
+      // Secrets: load a local .env, then say out loud what is still missing.
+      //
+      // The deployed function gets its secrets injected by the runtime. `fn
+      // invoke` cannot do the same — the API returns each secret's key and last
+      // four characters, never the value, which is the right call for a secret
+      // store. So a handler that reads process.env.CALCOM_API_KEY locally hit
+      // its own failure branch and returned something like
+      // `{ ok: false, reason: "not_configured" }` — a plausible, quiet, wrong
+      // answer that reads as "my code is broken".
+      //
+      // `--live` made that worse by promising real calls while still running
+      // without credentials.
+      const dotenv = await loadDotEnv(projectDir)
       const env: Record<string, string> = {
         ...process.env as Record<string, string>,
+        ...dotenv,
         ZAVU_FUNCTION_ID: config?.functionId ?? "fn_local",
         ZAVU_PROJECT_ID: config?.projectId ?? "project_local",
         ZAVU_FUNCTION_SLUG: config?.slug ?? "local",
@@ -291,6 +305,28 @@ try {
         ui.hint(`Run \`npm install\` in ${projectDir}, then try again.`)
         ui.hint("(Deploy does not need it; local invoke and tsc do.)")
         process.exit(2)
+      }
+
+      // Name the gap instead of letting the handler fail its own way.
+      if (config?.functionId) {
+        try {
+          const api = await buildApi()
+          const res = await api.get<{ secrets?: Array<{ key: string }> }>(
+            `/v1/functions/${config.functionId}/secrets`
+          )
+          const missing = (res.secrets ?? [])
+            .map((s) => s.key)
+            .filter((k) => k !== "ZAVU_API_KEY" && env[k] === undefined)
+          if (missing.length > 0) {
+            ui.warn(
+              `Not injected locally: ${missing.join(", ")} — the API never returns secret values.`
+            )
+            ui.hint(`Put them in ${join(projectDir, ".env")} or export them before running.`)
+            ui.hint("Handlers that read them will take their unconfigured branch.")
+          }
+        } catch {
+          // A lookup failure must not block a local run.
+        }
       }
 
       const label = toolMode
@@ -343,4 +379,38 @@ try {
       }
       if (exitCode !== 0) process.exit(exitCode)
     })
+}
+
+/**
+ * Read `.env` from the function directory, if there is one.
+ *
+ * Deliberately minimal: `KEY=value`, `#` comments, optional surrounding quotes.
+ * Anything fancier belongs in the user's own tooling — this exists so local
+ * invocation can see the same names the deployed function sees, not to become a
+ * dotenv implementation.
+ */
+async function loadDotEnv(dir: string): Promise<Record<string, string>> {
+  let raw: string
+  try {
+    raw = await readFile(join(dir, ".env"), "utf8")
+  } catch {
+    return {}
+  }
+  const out: Record<string, string> = {}
+  for (const line of raw.split(/\r?\n/)) {
+    const trimmed = line.trim()
+    if (!trimmed || trimmed.startsWith("#")) continue
+    const eq = trimmed.indexOf("=")
+    if (eq <= 0) continue
+    const key = trimmed.slice(0, eq).trim()
+    let value = trimmed.slice(eq + 1).trim()
+    if (
+      (value.startsWith('"') && value.endsWith('"')) ||
+      (value.startsWith("'") && value.endsWith("'"))
+    ) {
+      value = value.slice(1, -1)
+    }
+    out[key] = value
+  }
+  return out
 }

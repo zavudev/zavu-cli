@@ -100,7 +100,18 @@ export function functionsHttpCommand(): Command {
             httpEnabled: name === "enable",
           })
         } catch (err) {
-          fail(err instanceof Error ? err.message : String(err))
+          const msg = err instanceof Error ? err.message : String(err)
+          // A project whose API predates the httpEnabled field rejects the body
+          // with the old validation message. Leaking that verbatim sends the
+          // caller looking for a mistake in their own request, when the real
+          // answer is "this endpoint does not support the toggle yet".
+          if (/sourceCode and\/or dependencies/i.test(msg)) {
+            fail(
+              "This project's API does not support toggling HTTP yet. " +
+                "Create the function with `--http`, or ask for the API to be updated."
+            )
+          }
+          fail(msg)
         }
         const fn = await fetchFunction(functionId)
         if (name === "disable") {
