@@ -71,7 +71,21 @@ export async function writeTsconfig(targetDir: string): Promise<void> {
  * is secret (secrets live server-side and are never written here), so it
  * belongs in version control.
  */
-export const SCAFFOLD_GITIGNORE = ["node_modules/", "*.log", ""].join("\n")
+/**
+ * `.env` is here because the docs tell you to put real secrets in it, and the
+ * same docs tell you to commit `.zavu/` — so the expected flow has this
+ * directory under version control. Without this line, following both
+ * instructions literally commits DATABASE_URLs and API keys. Every other entry
+ * costs a rebuild; this one costs credentials.
+ */
+export const SCAFFOLD_GITIGNORE = [
+  "node_modules/",
+  "*.log",
+  ".env",
+  ".env.*",
+  "!.env.example",
+  "",
+].join("\n")
 
 /**
  * Resolve the project id a scaffolded function belongs to.

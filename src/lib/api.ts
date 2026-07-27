@@ -7,7 +7,7 @@
 // Use the SDK when it has the method (richer types). Use this when it doesn't.
 
 import { resolveCredentials } from "./config"
-import { fail } from "./ui"
+import { fail, ui } from "./ui"
 
 export interface ApiClient {
   get<T = unknown>(path: string, query?: Record<string, unknown>): Promise<T>
@@ -64,6 +64,7 @@ export async function buildApi(): Promise<ApiClient> {
   }
   const apiKey = creds!.apiKey
   const baseUrl = creds!.apiBaseUrl.replace(/\/$/, "")
+  warnIfNotProduction(baseUrl)
 
   async function request<T>(
     method: string,
@@ -111,4 +112,26 @@ export async function buildApi(): Promise<ApiClient> {
     patch: (p, b) => request("PATCH", p, { body: b }),
     del: (p) => request("DELETE", p),
   }
+}
+
+/** Printed at most once per process — a banner on every call would be noise. */
+let announcedNonProd = false
+
+/**
+ * Say out loud when the CLI is not talking to the production API.
+ *
+ * `zavu login` stores whichever base URL it was pointed at, and a credential
+ * left over from a dev deployment is invisible afterwards: every command
+ * succeeds, against the wrong backend. That produced a full round of "the API
+ * does not support this" reports where the feature was live in production the
+ * whole time and the CLI was querying a stale dev instance.
+ *
+ * `whoami` already prints the URL, but nobody runs `whoami` before each
+ * command. This costs one dim line and makes the mistake self-evident.
+ */
+function warnIfNotProduction(baseUrl: string): void {
+  if (announcedNonProd) return
+  if (/^https:\/\/api\.zavu\.dev$/i.test(baseUrl)) return
+  announcedNonProd = true
+  ui.hint(`↯ using ${baseUrl} (not the production API)`)
 }

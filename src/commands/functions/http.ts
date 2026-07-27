@@ -101,14 +101,15 @@ export function functionsHttpCommand(): Command {
           })
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err)
-          // A project whose API predates the httpEnabled field rejects the body
-          // with the old validation message. Leaking that verbatim sends the
-          // caller looking for a mistake in their own request, when the real
-          // answer is "this endpoint does not support the toggle yet".
-          if (/sourceCode and\/or dependencies/i.test(msg)) {
+          // This endpoint accepts httpEnabled. If the server says otherwise it
+          // is running older code than the CLI, and the only useful thing to
+          // report is WHICH server — the previous version of this message
+          // claimed "the API does not support this yet", which sent people
+          // looking for a missing feature instead of a stale deployment.
+          if (/sourceCode/i.test(msg) && !/httpEnabled/i.test(msg)) {
             fail(
-              "This project's API does not support toggling HTTP yet. " +
-                "Create the function with `--http`, or ask for the API to be updated."
+              `${api.baseUrl} is running an API older than this CLI: it does not know httpEnabled.\n` +
+                "  Deploy the backend there, or point the CLI at one that has it (`zavu login --base-url <url>`)."
             )
           }
           fail(msg)
