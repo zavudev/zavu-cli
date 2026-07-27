@@ -177,7 +177,10 @@ if (!tool) {
 // being stricter than it.
 const schema = tool.parameters
 if (schema && typeof schema === "object") {
-  const props = (schema.properties ?? {}) as Record<string, { type?: string }>
+  const props = (schema.properties ?? {}) as Record<
+    string,
+    { type?: string; enum?: unknown[] }
+  >
   const required = (schema.required ?? []) as string[]
   const problems: string[] = []
 
@@ -190,18 +193,41 @@ if (schema && typeof schema === "object") {
       continue
     }
     const want = props[key].type
-    if (!want || value === null) continue
-    const got = Array.isArray(value) ? "array" : typeof value
-    // JSON Schema's "integer" has no JS typeof; treat it as a number check.
-    const ok = want === "integer" ? Number.isInteger(value) : got === want
-    if (!ok) problems.push(\`"\${key}" should be \${want}, got \${got}\`)
+    if (value === null) continue
+    if (want) {
+      const got = Array.isArray(value) ? "array" : typeof value
+      // JSON Schema's "integer" has no JS typeof; treat it as a number check.
+      const ok = want === "integer" ? Number.isInteger(value) : got === want
+      if (!ok) {
+        problems.push(\`"\${key}" should be \${want}, got \${got}\`)
+        continue
+      }
+    }
+    // A closed enum is the strictest thing the schema says, and it is the one a
+    // caller is most likely to get wrong — the value has the right type, so a
+    // type check waves it through and the handler switches on a case that never
+    // matches. The model is handed this same list, so a value outside it is not
+    // something production would ever send.
+    const allowed = props[key].enum
+    if (Array.isArray(allowed) && allowed.length > 0 && !allowed.includes(value)) {
+      problems.push(
+        \`"\${key}" must be one of \${allowed.map((v) => JSON.stringify(v)).join(" | ")}, got \${JSON.stringify(value)}\`
+      )
+    }
   }
 
   if (problems.length > 0) {
     console.error("✗ arguments do not match the tool's schema:")
     for (const p of problems) console.error("   • " + p)
     const shape = Object.entries(props)
-      .map(([k, v]) => \`\${k}: \${v.type ?? "any"}\${required.includes(k) ? "" : "?"}\`)
+      .map(([k, v]) => {
+        // Show the enum instead of the bare type: "cold|warm|hot" tells the
+        // caller how to fix it, "string" only tells them they already were.
+        const t = Array.isArray(v.enum) && v.enum.length > 0
+          ? v.enum.map((x) => String(x)).join("|")
+          : v.type ?? "any"
+        return \`\${k}: \${t}\${required.includes(k) ? "" : "?"}\`
+      })
       .join(", ")
     console.error("  expected: { " + shape + " }")
     process.exit(2)

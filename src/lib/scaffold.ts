@@ -72,3 +72,29 @@ export async function writeTsconfig(targetDir: string): Promise<void> {
  * belongs in version control.
  */
 export const SCAFFOLD_GITIGNORE = ["node_modules/", "*.log", ""].join("\n")
+
+/**
+ * Resolve the project id a scaffolded function belongs to.
+ *
+ * `POST /v1/functions` returns the function, not the project, so both scaffold
+ * paths used to write `projectId: ""` into `.zavu/config.json` with a comment
+ * saying it was "implicit from the API key". It is implicit to the server, but
+ * not to anything reading the file: `zavu fn invoke` falls back to the string
+ * "project_local", so the local run reports a project that does not exist.
+ *
+ * `/v1/me` exists precisely to answer "which project is this key bound to".
+ *
+ * Best-effort on purpose: an older server without `/v1/me` should still produce
+ * a working scaffold, so a failure here degrades to the old empty string rather
+ * than aborting a `pull` that has already created the function server-side.
+ */
+export async function resolveProjectId(api: {
+  get<T = unknown>(path: string, query?: Record<string, unknown>): Promise<T>
+}): Promise<string> {
+  try {
+    const me = await api.get<{ project?: { id?: string } }>("/v1/me")
+    return me.project?.id ?? ""
+  } catch {
+    return ""
+  }
+}

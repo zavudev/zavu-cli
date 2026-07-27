@@ -18,7 +18,7 @@ import { buildApi, ApiClient } from "../../lib/api"
 import { buildClient } from "../../lib/client"
 import { writeProjectConfig } from "../../lib/config"
 import { ui, fail, cli } from "../../lib/ui"
-import { writeTsconfig, RUNTIME_DEV_DEPENDENCY, SCAFFOLD_GITIGNORE } from "../../lib/scaffold"
+import { writeTsconfig, RUNTIME_DEV_DEPENDENCY, SCAFFOLD_GITIGNORE, resolveProjectId } from "../../lib/scaffold"
 
 interface CatalogItem {
   id: string
@@ -276,7 +276,9 @@ async function scaffoldTemplate(
   await writeTsconfig(targetDir)
   await writeProjectConfig(
     {
-      projectId: registered.projectId,
+      // `POST /v1/functions` does not return the project, so ask the endpoint
+      // whose whole job is to say which project this key is bound to.
+      projectId: registered.projectId || (await resolveProjectId(api)),
       functionId: registered.functionId,
       slug: registered.slug,
       name: template.name,

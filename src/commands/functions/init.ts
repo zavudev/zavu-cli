@@ -11,7 +11,7 @@ import { join, basename, resolve } from "node:path"
 import { buildClient } from "../../lib/client"
 import { writeProjectConfig } from "../../lib/config"
 import { ui, fail, cli, extractServerError } from "../../lib/ui"
-import { writeTsconfig, RUNTIME_DEV_DEPENDENCY, SCAFFOLD_GITIGNORE } from "../../lib/scaffold"
+import { writeTsconfig, RUNTIME_DEV_DEPENDENCY, SCAFFOLD_GITIGNORE, resolveProjectId } from "../../lib/scaffold"
 import { TEMPLATES } from "../../templates"
 
 interface InitOpts {
@@ -125,7 +125,14 @@ export function functionsInitCommand(): Command {
       await writeTsconfig(targetDir)
 
       await writeProjectConfig(
-        { projectId: fnId.projectId, functionId: fnId.functionId, slug: fnId.slug, name },
+        {
+          // See the note in lib/scaffold.ts: /v1/functions does not surface the
+          // project, so an empty id here becomes "project_local" at invoke time.
+          projectId: fnId.projectId || (await resolveProjectId(client)),
+          functionId: fnId.functionId,
+          slug: fnId.slug,
+          name,
+        },
         targetDir
       )
 
