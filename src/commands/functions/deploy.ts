@@ -10,6 +10,7 @@ import { Command } from "commander"
 import { readFile } from "node:fs/promises"
 import { join } from "node:path"
 import { buildClient } from "../../lib/client"
+import { buildApi } from "../../lib/api"
 import { readProjectConfig } from "../../lib/config"
 import { ui, fail, extractServerError } from "../../lib/ui"
 
@@ -139,7 +140,21 @@ export function functionsDeployCommand(): Command {
           await ui.scrambleSuccess(
             `Deployed in ${((Date.now() - startedAt) / 1000).toFixed(1)}s`
           )
-          if (config!.publicUrl) ui.hint(`Public URL: ${config!.publicUrl}`)
+          // The URL lives on the server, not in .zavu/config.json — which is
+          // written at scaffold time and never carries it. Reading the local
+          // file meant this line could not fire, so `--http` produced an
+          // endpoint with no way to discover its address.
+          try {
+            const api = await buildApi()
+            const fn = await api.get<{
+              function?: { httpEnabled?: boolean; publicUrl?: string | null }
+            }>(`/v1/functions/${config!.functionId}`)
+            if (fn.function?.httpEnabled && fn.function.publicUrl) {
+              ui.info(`Public URL: ${fn.function.publicUrl}`)
+            }
+          } catch {
+            // Never fail a successful deploy over a cosmetic lookup.
+          }
           // The Lambda is live either way, so this is not `fail()`. But a
           // probe that threw means the agents and tools in the source were
           // never synced, and a script that only checks the exit code must not

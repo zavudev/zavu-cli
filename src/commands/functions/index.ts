@@ -10,6 +10,7 @@ import { functionsLogsCommand } from "./logs"
 import { functionsTriggersCommand } from "./triggers"
 import { functionsSecretsCommand } from "./secrets"
 import { functionsDeleteCommand } from "./delete"
+import { functionsInfoCommand, functionsHttpCommand } from "./http"
 import {
   functionsVersionsCommand,
   functionsRollbackCommand,
@@ -28,6 +29,8 @@ export function functionsCommand(): Command {
   cmd.addCommand(functionsSecretsCommand())
   cmd.addCommand(functionsVersionsCommand())
   cmd.addCommand(functionsRollbackCommand())
+  cmd.addCommand(functionsInfoCommand())
+  cmd.addCommand(functionsHttpCommand())
   cmd.addCommand(functionsDeleteCommand())
   return cmd
 }
