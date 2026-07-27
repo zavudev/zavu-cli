@@ -165,9 +165,12 @@ export function functionsDeployCommand(): Command {
 interface ReconcileSummary {
   agentsCreated: string[]
   agentsUpdated: string[]
+  /** Present since the reconcile learned to diff. Older servers omit it. */
+  agentsUnchanged?: string[]
   agentsDeleted: string[]
   toolsCreated: string[]
   toolsUpdated: string[]
+  toolsUnchanged?: string[]
   toolsDeleted: string[]
   warnings: string[]
 }
@@ -181,21 +184,29 @@ function printReconcileSummary(
     const agentsTouched =
       summary.agentsCreated.length +
       summary.agentsUpdated.length +
+      (summary.agentsUnchanged?.length ?? 0) +
       summary.agentsDeleted.length
     const toolsTouched =
       summary.toolsCreated.length +
       summary.toolsUpdated.length +
+      (summary.toolsUnchanged?.length ?? 0) +
       summary.toolsDeleted.length
+    // `=` for unchanged. Previously everything that already existed printed as
+    // `~`, so a redeploy with no source change was indistinguishable from one
+    // that rewrote the prompt — and the only way to confirm an edit had landed
+    // was to run `agents test` with a sentinel word in it.
     if (agentsTouched > 0) {
       ui.info("Agents synced:")
       for (const n of summary.agentsCreated) ui.hint(`  + ${n}`)
       for (const n of summary.agentsUpdated) ui.hint(`  ~ ${n}`)
+      for (const n of summary.agentsUnchanged ?? []) ui.hint(`  = ${n} (unchanged)`)
       for (const n of summary.agentsDeleted) ui.hint(`  - ${n}`)
     }
     if (toolsTouched > 0) {
       ui.info("Tools synced:")
       for (const n of summary.toolsCreated) ui.hint(`  + ${n}`)
       for (const n of summary.toolsUpdated) ui.hint(`  ~ ${n}`)
+      for (const n of summary.toolsUnchanged ?? []) ui.hint(`  = ${n} (unchanged)`)
       for (const n of summary.toolsDeleted) ui.hint(`  - ${n}`)
     }
     for (const w of summary.warnings) ui.warn(w)

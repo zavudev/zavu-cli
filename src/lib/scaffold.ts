@@ -31,6 +31,12 @@ export const RUNTIME_DEV_DEPENDENCY: Record<string, string> = {
   // so without this a fresh scaffold fails to typecheck before the developer
   // has written a line.
   "@types/node": "^24.0.0",
+  // We tell people to run `tsc --noEmit`, and without this `npx tsc` resolves
+  // `tsc@2.0.4` from the registry — an unrelated deprecated package that prints
+  // "This is not the tsc command you are looking for" and exits 0. A typecheck
+  // that passes without checking anything is worse than no typecheck, so the
+  // compiler ships with the scaffold.
+  typescript: "^5.6.0",
 }
 
 const TSCONFIG = {

@@ -140,6 +140,9 @@ export function functionsInitCommand(): Command {
 
       ui.info("\nNext steps:")
       ui.hint(`cd ${basename(targetDir)}`)
+      // See the note in agents/factory.ts: deploy does not need this, but every
+      // local check does, and skipping it looks like a broken tool.
+      ui.hint("npm install                          # required for fn invoke + tsc")
       if (template.requiredSecrets.length > 0) {
         for (const s of template.requiredSecrets) {
           ui.hint(cli(`fn secrets set ${s.key} <value>`))

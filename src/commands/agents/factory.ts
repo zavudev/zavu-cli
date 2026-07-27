@@ -107,6 +107,11 @@ export function attachFactoryCommands(parent: Command): void {
       // 6. Next steps — mirror the Functions quickstart.
       ui.info("\nNext steps:")
       ui.hint(`cd ${basename(targetDir)}`)
+      // Deploy works without this, so it is tempting to leave out. But every
+      // local verification step — `fn invoke`, `tsc --noEmit`, the editor — is
+      // dead until the devDependencies are installed, and the failure reads as
+      // "the tool is broken" rather than "you skipped a step".
+      ui.hint("npm install                          # required for fn invoke + tsc")
       if (!senderSet) {
         ui.hint(`${cli("senders list")}                    # find your sender id`)
         ui.hint(cli("fn secrets set SENDER_ID <senderId>"))
