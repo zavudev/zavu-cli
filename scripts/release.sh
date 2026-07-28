@@ -173,29 +173,21 @@ echo ""
 echo "[release] ✓ Release published"
 echo "  https://github.com/${RELEASE_REPO}/releases/tag/${TAG}"
 
-# Auto-update the Homebrew tap if it's reachable. The release is already
-# published — if this step fails, the tap is just out of sync but the
-# release URL works (users on `install.sh` still get the binary). Re-run
-# `update-tap.sh <version>` manually to retry.
-TAP_FAILED=0
-if [[ "${SKIP_TAP_UPDATE:-}" != "1" ]] && command -v gh >/dev/null 2>&1; then
+# The Homebrew tap is deprecated. It silently stopped updating and shipped
+# 0.5.0 to anyone following the docs while npm was on 0.9.4, which is worse than
+# not offering it: the CLI looked current and was four minors behind. npm is now
+# the only published channel, and `npx zavudev@latest` always resolves the
+# newest release. Set UPDATE_TAP=1 to push the formula anyway.
+if [[ "${UPDATE_TAP:-}" == "1" ]] && command -v gh >/dev/null 2>&1; then
   echo ""
-  echo "[release] Updating Homebrew tap..."
-  if "$SCRIPT_DIR/update-tap.sh" "$VERSION"; then
-    echo ""
-    echo "  Users can now: brew install zavudev/tools/zavu"
-  else
-    TAP_FAILED=1
-    echo "[release] Tap update failed (release is fine). Retry with:"
-    echo "  ./scripts/update-tap.sh $VERSION"
-    # Surface a GitHub Actions warning if we're running in CI so the run
-    # shows a yellow indicator instead of green-with-broken-tap.
-    if [[ -n "${GITHUB_ACTIONS:-}" ]]; then
-      echo "::warning::Homebrew tap update failed for v${VERSION}. Re-run ./scripts/update-tap.sh ${VERSION} locally."
-    fi
+  echo "[release] Updating deprecated Homebrew tap (UPDATE_TAP=1)..."
+  if ! "$SCRIPT_DIR/update-tap.sh" "$VERSION"; then
+    echo "[release] Tap update failed (release is fine)."
   fi
 fi
 
 echo ""
-echo "  Or for users without Homebrew:"
+echo "  Install:"
+echo "    npx zavudev@latest --version"
+echo "    npm install -g zavudev"
 echo "    curl -fsSL https://raw.githubusercontent.com/zavudev/zavu/main/packages/zavu-cli/scripts/install.sh | bash"

@@ -44,7 +44,7 @@ ls dist/
 ```
 
 The binaries embed the Bun runtime; users don't need anything installed.
-Ship via Homebrew tap, GitHub Releases, or `npm install -g`.
+Ship via npm (`npx zavudev@latest` / `npm install -g zavudev`) and GitHub Releases. The Homebrew tap is deprecated.
 
 ## Architecture
 

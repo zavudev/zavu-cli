@@ -27,6 +27,12 @@ import { join } from "node:path"
  */
 export const RUNTIME_DEV_DEPENDENCY: Record<string, string> = {
   "@zavudev/functions": "^0.1.0",
+  // The blank template imports the SDK on its first line, but it was never
+  // added here, so a fresh scaffold failed with "Cannot find module
+  // '@zavudev/sdk'" before the developer had changed anything. The range is
+  // pinned to the real published major: guessing "^0.1.0" from the line above
+  // resolves to nothing, since the SDK is versioned independently.
+  "@zavudev/sdk": "^0.51.0",
   // Handlers read process.env and call fetch. The tsconfig asks for node types,
   // so without this a fresh scaffold fails to typecheck before the developer
   // has written a line.

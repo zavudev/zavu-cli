@@ -20,6 +20,7 @@
 
 import { Command } from "commander"
 import { cli } from "./lib/ui"
+import { warnIfOutdated } from "./lib/updateCheck"
 // Version is sourced from package.json so it stays in sync with each release
 // without anyone having to remember to bump a string here. Bun's --compile
 // inlines this JSON into the standalone binary at build time.
@@ -60,7 +61,11 @@ const program = new Command()
   .description(
     "Zavu CLI — deploy Functions, send messages, and manage every resource exposed by the public API."
   )
-  .version(pkg.version)
+  // `--version` is handled here rather than by commander's built-in flag so it
+  // can also say when that version is stale. A CLI silently four minors behind
+  // produces "the API does not support this" reports that are really an old
+  // binary. The check is best-effort and never blocks.
+  .option("-V, --version", "Print the version and check for a newer one")
   .showHelpAfterError()
 
 // Auth + Functions dev workflow. The `functions` group keeps the full set
@@ -137,7 +142,14 @@ program.on("command:*", (operands: string[]) => {
   process.exit(1)
 })
 
-program.parseAsync().catch((err) => {
-  process.stderr.write(`Error: ${err instanceof Error ? err.message : String(err)}\n`)
-  process.exit(1)
-})
+// Intercepted before parseAsync so `zavu --version` prints the number, checks
+// npm, and exits without commander looking for a subcommand.
+if (process.argv.includes("--version") || process.argv.includes("-V")) {
+  process.stdout.write(`${pkg.version}\n`)
+  void warnIfOutdated(pkg.version).then(() => process.exit(0))
+} else {
+  program.parseAsync().catch((err) => {
+    process.stderr.write(`Error: ${err instanceof Error ? err.message : String(err)}\n`)
+    process.exit(1)
+  })
+}
