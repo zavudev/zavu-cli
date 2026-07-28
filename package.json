@@ -29,7 +29,7 @@
     "prepack": "bun run build"
   },
   "devDependencies": {
-    "@zavudev/sdk": "*",
+    "@zavudev/sdk": "^0.51.0",
     "commander": "^12.1.0",
     "kleur": "^4.1.5",
     "prompts": "^2.4.2",
