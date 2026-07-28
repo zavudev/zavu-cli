@@ -1,4 +1,4 @@
-// `zavu functions logs` — fetch / tail CloudWatch logs for the deployed function
+// `npx zavudev functions logs` — fetch / tail CloudWatch logs for the deployed function
 // via Zavu's API. The same data shown in the dashboard's Logs tab.
 
 import { Command } from "commander"
@@ -23,7 +23,7 @@ export function functionsLogsCommand(): Command {
     .action(async (opts: LogsOpts) => {
       const config = await readProjectConfig()
       if (!config) {
-        fail("No .zavu/config.json found. Run inside a function directory or `zavu functions init` first.")
+        fail("No .zavu/config.json found. Run inside a function directory or `npx zavudev functions init` first.")
       }
       const client = await buildClient()
 

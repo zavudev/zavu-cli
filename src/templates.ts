@@ -51,7 +51,7 @@ export default defineFunction({
 // returns structured JSON the agent narrates back.
 //
 // Wiring:
-//   1. `zavu fn deploy` (this function, with httpEnabled=true)
+//   1. `npx zavudev fn deploy` (this function, with httpEnabled=true)
 //   2. Create an Agent on your WhatsApp sender
 //   3. Register the same publicUrl as the webhook for each tool with the
 //      correct `name` and `parameters` schema (see the comment block at the
@@ -62,9 +62,9 @@ export default defineFunction({
 const RESTAURANT = `// Restaurant reservations agent — fully declarative.
 //
 // defineAgent + defineTool register the agent and its tools at module load.
-// On \`zavu deploy\`, the platform reads these declarations and reconciles
-// the live agent + tools to match. No more separate \`zavu agents create\`
-// or \`zavu agents tools create\` commands — your function source IS the
+// On \`npx zavudev deploy\`, the platform reads these declarations and reconciles
+// the live agent + tools to match. No more separate \`npx zavudev agents create\`
+// or \`npx zavudev agents tools create\` commands — your function source IS the
 // source of truth.
 
 import { defineAgent, defineTool } from "@zavudev/functions"
@@ -72,7 +72,7 @@ import { defineAgent, defineTool } from "@zavudev/functions"
 // ---------------------------------------------------------------------------
 // 1) Declare the agent. Set SENDER_ID as a secret on the function in the
 //    dashboard (Secrets tab) — it's the ID of the WhatsApp sender that this
-//    agent will live on. Use \`zavu senders list\` to find it.
+//    agent will live on. Use \`npx zavudev senders list\` to find it.
 // ---------------------------------------------------------------------------
 defineAgent({
   senderId: process.env.SENDER_ID!,
@@ -253,7 +253,7 @@ export const TEMPLATES: CliFunctionTemplate[] = [
     requiredSecrets: [
       {
         key: "SENDER_ID",
-        hint: "ID of the WhatsApp sender this agent runs on (from `zavu senders list`).",
+        hint: "ID of the WhatsApp sender this agent runs on (from `npx zavudev senders list`).",
       },
     ],
   },

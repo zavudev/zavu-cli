@@ -75,7 +75,7 @@ function sleep(ms: number): Promise<void> {
 }
 
 // Solid-color box drawn with Unicode box characters. Centred ASCII brand
-// shown at the top of `zavu login` so the dev sees something striking the
+// shown at the top of `npx zavudev login` so the dev sees something striking the
 // moment the flow kicks off. Width is fixed; lines longer than the inner
 // width are clipped (we control the strings so this is fine in practice).
 const BANNER_WIDTH = 56
@@ -116,8 +116,9 @@ export function brandIntro(subtitle?: string) {
 }
 
 // How this run was launched, so printed next-steps use a command that actually
-// works. Someone who ran `npx zavudev …` has no `zavu` on their PATH, so telling
-// them to run `zavu deploy` is a dead end; a global install does have `zavu`.
+// works. The binary is `zavudev`: the old `zavu` name is gone, and nothing
+// should print it. Someone who ran `npx zavudev …` has no `zavudev` on their
+// PATH, so they get the npx form; a global install gets the bare binary.
 // npx executes the package from its own cache dir (~/.npm/_npx/<hash>) and sets
 // npm_command=exec — either signal means we were invoked through npx.
 let cachedInvocation: string | undefined
@@ -128,7 +129,7 @@ export function cli(rest = ""): string {
       entry.includes("/_npx/") ||
       entry.includes("\\_npx\\") ||
       process.env.npm_command === "exec"
-    cachedInvocation = viaNpx ? "npx zavudev" : "zavu"
+    cachedInvocation = viaNpx ? "npx zavudev" : "zavudev"
   }
   return rest ? `${cachedInvocation} ${rest}` : cachedInvocation
 }

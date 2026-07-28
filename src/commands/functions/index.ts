@@ -1,4 +1,4 @@
-// `zavu functions` — subcommand group for everything related to authoring and
+// `npx zavudev functions` — subcommand group for everything related to authoring and
 // shipping Zavu Functions.
 
 import { Command } from "commander"

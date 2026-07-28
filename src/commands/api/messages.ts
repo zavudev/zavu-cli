@@ -1,4 +1,4 @@
-// `zavu messages …` — thin wrappers over the SDK's messages resource.
+// `npx zavudev messages …` — thin wrappers over the SDK's messages resource.
 // Each subcommand maps 1:1 to a method on `client.messages`. Adding new
 // endpoints is trivial: import the SDK type, add a Commander subcommand,
 // pass-through the args.

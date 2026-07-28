@@ -57,7 +57,9 @@ import {
 } from "./commands/api/account"
 
 const program = new Command()
-  .name("zavu")
+  // The binary is `zavudev`; `zavu` is gone. This is what every usage line and
+  // error message is built from, so it has to match what people can actually run.
+  .name("zavudev")
   .description(
     "Zavu CLI — deploy Functions, send messages, and manage every resource exposed by the public API."
   )
@@ -70,7 +72,7 @@ const program = new Command()
 
 // Auth + Functions dev workflow. The `functions` group keeps the full set
 // (init, deploy, invoke, logs) for discoverability under one namespace, but
-// each one is also mounted top-level since `zavu init` / `zavu deploy` is
+// each one is also mounted top-level since `npx zavudev init` / `npx zavudev deploy` is
 // what most users will type from muscle memory.
 program.addCommand(loginCommand())
 program.addCommand(whoamiCommand())

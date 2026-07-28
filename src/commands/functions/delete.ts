@@ -1,4 +1,4 @@
-// `zavu fn delete` — permanently destroy a function and cascade everything
+// `npx zavudev fn delete` — permanently destroy a function and cascade everything
 // it owns (triggers, secrets, managed agents/tools, deployment history, the
 // auto API key, and the AWS Lambda).
 //
@@ -119,7 +119,7 @@ async function resolveTarget(
   const cfg = await readProjectConfig()
   if (!cfg) {
     fail(
-      "No function ID provided and no .zavu/config.json in cwd. Pass `zavu fn delete <functionId>` or run from a function directory."
+      "No function ID provided and no .zavu/config.json in cwd. Pass `npx zavudev fn delete <functionId>` or run from a function directory."
     )
   }
   return { functionId: cfg!.functionId, slug: cfg!.slug, name: cfg!.name }

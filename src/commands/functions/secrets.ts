@@ -1,7 +1,7 @@
-// `zavu fn secrets …` — manage env vars on a Zavu Function.
+// `npx zavudev fn secrets …` — manage env vars on a Zavu Function.
 //
 // Operates on the function in cwd by default (via .zavu/config.json), so
-// from the function directory you just type `zavu fn secrets set FOO bar`.
+// from the function directory you just type `npx zavudev fn secrets set FOO bar`.
 // Pass --function <id> to target another function without cd'ing.
 //
 // Plaintext NEVER leaves the server side after a set — list only shows the
@@ -71,7 +71,7 @@ async function resolveValue(
     result = (await readFile(fromFile, "utf8")).trimEnd()
     source = `--from-file ${fromFile}`
   } else if (inlineValue === "-") {
-    // Read entire stdin (works for `cat secret | zavu fn secrets set KEY -`).
+    // Read entire stdin (works for `cat secret | npx zavudev fn secrets set KEY -`).
     const chunks: Buffer[] = []
     for await (const chunk of process.stdin) {
       chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk))
@@ -81,8 +81,8 @@ async function resolveValue(
   } else if (inlineValue === undefined || inlineValue === "") {
     fail(
       "Pass a value as an argument, --from-file <path>, or '-' to read stdin.\n" +
-        "  Example: zavu fn secrets set OPENAI_API_KEY sk-...\n" +
-        "  Or:      cat key.txt | zavu fn secrets set OPENAI_API_KEY -"
+        "  Example: npx zavudev fn secrets set OPENAI_API_KEY sk-...\n" +
+        "  Or:      cat key.txt | npx zavudev fn secrets set OPENAI_API_KEY -"
     )
     return "" // unreachable, satisfies TS
   } else {
@@ -129,7 +129,7 @@ export function functionsSecretsCommand(): Command {
       const stale = res.secrets.filter((s) => !s.syncedToAws).length
       if (stale > 0) {
         ui.hint(
-          `${stale} secret${stale === 1 ? "" : "s"} not yet pushed to Lambda — run \`zavu deploy\` to sync.`
+          `${stale} secret${stale === 1 ? "" : "s"} not yet pushed to Lambda — run \`npx zavudev deploy\` to sync.`
         )
       }
     })
@@ -161,7 +161,7 @@ export function functionsSecretsCommand(): Command {
         const verb = res.secret.created ? "Created" : "Updated"
         ui.success(`${verb} ${res.secret.key} (…${res.secret.valueLast4})`)
         ui.hint(
-          "Lambda env var updates on the next `zavu deploy`. Run it now to apply."
+          "Lambda env var updates on the next `npx zavudev deploy`. Run it now to apply."
         )
       }
     )

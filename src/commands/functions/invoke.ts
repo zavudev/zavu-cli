@@ -1,8 +1,8 @@
-// `zavu functions invoke` — run the local function with a synthetic event,
+// `npx zavudev functions invoke` — run the local function with a synthetic event,
 // no AWS deploy needed.
 //
 // This is the inner-loop iteration command. The dev edits index.ts, runs
-// `zavu functions invoke --event message.inbound`, sees output in <500ms,
+// `npx zavudev functions invoke --event message.inbound`, sees output in <500ms,
 // repeats. Skips bundling, npm install, Lambda upload — straight tsx execution.
 //
 // Two run modes:
@@ -347,8 +347,8 @@ try {
             if (err.code === "ENOENT") {
               reject(
                 new Error(
-                  "`zavu functions invoke` runs your function locally with Bun. " +
-                    "Install it from https://bun.sh, or deploy and test with `zavu functions deploy`."
+                  "`npx zavudev functions invoke` runs your function locally with Bun. " +
+                    "Install it from https://bun.sh, or deploy and test with `npx zavudev functions deploy`."
                 )
               )
               return

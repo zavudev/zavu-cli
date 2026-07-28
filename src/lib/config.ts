@@ -2,10 +2,10 @@
 //
 // Two layers:
 //   ~/.zavu/credentials.json  — global, machine-wide. Stores the API key used
-//                               for every Zavu API call. Written by `zavu login`.
+//                               for every Zavu API call. Written by `npx zavudev login`.
 //   ./.zavu/config.json       — per-project, in the function's source dir.
 //                               Stores projectId / functionId / slug.
-//                               Written by `zavu init` and read by `zavu deploy`.
+//                               Written by `npx zavudev init` and read by `npx zavudev deploy`.
 
 import { homedir } from "node:os"
 import { join } from "node:path"
@@ -30,7 +30,7 @@ export interface ProjectConfig {
   functionId: string
   slug: string
   name: string
-  // Resolved at `zavu init` time. Lets `zavu deploy` skip a roundtrip
+  // Resolved at `npx zavudev init` time. Lets `npx zavudev deploy` skip a roundtrip
   // to the API to discover the public URL after publishing.
   publicUrl?: string
 }
@@ -58,7 +58,7 @@ export async function readCredentials(): Promise<GlobalCredentials | null> {
  * Credentials for this run, preferring the environment over the saved file.
  *
  * `ZAVUDEV_API_KEY` (with optional `ZAVUDEV_API_BASE_URL`) lets a container, a
- * CI job, or a coding agent authenticate without an interactive `zavu login`
+ * CI job, or a coding agent authenticate without an interactive `npx zavudev login`
  * and without a writable home directory. The docs have promised this for a
  * while; only `login` actually read it, so every other command still demanded
  * the file and died with "Not logged in" in exactly the environments this is

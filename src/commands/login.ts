@@ -1,4 +1,4 @@
-// `zavu login` — browser-based authentication.
+// `npx zavudev login` — browser-based authentication.
 //
 // Flow (default):
 //   1. CLI starts a tiny HTTP server on a random localhost port.
@@ -30,7 +30,7 @@ import { ui, fail, cli } from "../lib/ui"
 // Defaults point at production, but env vars override so a developer running
 // the dashboard locally can do:
 //   export ZAVU_DASHBOARD_URL=http://localhost:3000
-// and then `zavu login` Just Works against their dev stack. The dashboard
+// and then `npx zavudev login` Just Works against their dev stack. The dashboard
 // page also reports its own API origin back through the callback (see
 // `apiBaseUrl` query param below), so once the user picks the right
 // dashboard, the matching API URL is auto-discovered.
@@ -75,7 +75,7 @@ export function loginCommand(): Command {
         return
       }
 
-      // Browser flow — show the brand the moment the user types `zavu login`.
+      // Browser flow — show the brand the moment the user types `npx zavudev login`.
       ui.brandIntro("One API for all your messages.")
       const state = randomToken()
       const result = await startCallbackServerAndWait(state, opts)

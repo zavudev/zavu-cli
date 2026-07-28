@@ -1,4 +1,4 @@
-// `zavu functions deploy` — read the local index.ts + package.json, push them
+// `npx zavudev functions deploy` — read the local index.ts + package.json, push them
 // to Zavu's deploy pipeline, stream status until active.
 //
 // The actual bundling (esbuild + npm install) happens server-side in the
@@ -29,11 +29,11 @@ export function functionsDeployCommand(): Command {
     .option("--watch", "(future) keep running and redeploy on file changes")
     .action(async (opts: { source: string; watch?: boolean; updateRuntime?: boolean; arch?: string }) => {
       if (opts.watch) {
-        fail("--watch is not implemented yet. Use `zavu functions invoke` for local iteration.")
+        fail("--watch is not implemented yet. Use `npx zavudev functions invoke` for local iteration.")
       }
       const config = await readProjectConfig()
       if (!config) {
-        fail("No .zavu/config.json found. Run `zavu functions init` first or `cd` into a function directory.")
+        fail("No .zavu/config.json found. Run `npx zavudev functions init` first or `cd` into a function directory.")
       }
       const client = await buildClient()
 

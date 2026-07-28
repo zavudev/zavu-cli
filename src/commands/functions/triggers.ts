@@ -1,4 +1,4 @@
-// `zavu functions triggers …` — bind a function to Zavu events.
+// `npx zavudev functions triggers …` — bind a function to Zavu events.
 //
 // A trigger is a (functionId, eventType, senderId?) tuple. When the named
 // event fires for the matching sender (or any sender if senderId is omitted),
@@ -72,7 +72,7 @@ export function functionsTriggersCommand(): Command {
         return
       }
       if (res.triggers.length === 0) {
-        ui.info("No triggers. Add some with `zavu functions triggers add`.")
+        ui.info("No triggers. Add some with `npx zavudev functions triggers add`.")
         return
       }
       ui.table(

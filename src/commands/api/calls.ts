@@ -112,7 +112,7 @@ export function callsCommand(): Command {
           ...(opts.maxMinutes ? { maxDurationMinutes: Number(opts.maxMinutes) } : {}),
         })
         ui.success(`Dialing ${res.call.to}`)
-        ui.hint(`call id: ${res.call.id} — follow it with \`zavu calls get ${res.call.id}\``)
+        ui.hint(`call id: ${res.call.id} — follow it with \`npx zavudev calls get ${res.call.id}\``)
       } catch (err) {
         fail(err instanceof Error ? err.message : String(err))
       }

@@ -1,8 +1,8 @@
-// `zavu functions init` — scaffold a new function project locally.
+// `npx zavudev functions init` — scaffold a new function project locally.
 //
 // Creates the local file tree (index.ts, package.json) and registers the
 // function in your Zavu project. Writes the link to `.zavu/config.json` so
-// subsequent `zavu deploy` calls know which function to update.
+// subsequent `npx zavudev deploy` calls know which function to update.
 
 import { Command } from "commander"
 import prompts from "prompts"
@@ -213,7 +213,7 @@ function slugify(name: string): string {
 /**
  * True when the path exists and holds something.
  *
- * `mkdir my-agent && cd my-agent && zavu init` is the normal way to start, and
+ * `mkdir my-agent && cd my-agent && npx zavudev init` is the normal way to start, and
  * refusing merely because the directory exists turned that into an error for a
  * folder with nothing to overwrite. Only real contents are a reason to stop.
  */

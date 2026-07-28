@@ -1,6 +1,6 @@
 // `zavu email-domains` — add an email sending domain, get the DNS records to
 // publish, verify them, and remove it. Once a domain is verified you can create
-// an email sender on it: `zavu senders create --email noreply@yourdomain.com`.
+// an email sender on it: `npx zavudev senders create --email noreply@yourdomain.com`.
 //
 // Publishing the DNS records is the one step that happens at your DNS provider
 // (that's outside Zavu); everything else is here.

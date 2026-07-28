@@ -1,14 +1,14 @@
-// Factory agents — `zavu agents catalog` and `zavu agents pull <id>`.
+// Factory agents — `npx zavudev agents catalog` and `npx zavudev agents pull <id>`.
 //
 // These mirror the Functions quickstart flow for voice/text agents: pull a
-// ready-made agent into your codebase, then `zavu deploy`. The catalog and the
+// ready-made agent into your codebase, then `npx zavudev deploy`. The catalog and the
 // rendered function files come from the API (`/v1/agent-templates`), so the CLI
 // never hard-codes an agent body — new factory agents ship server-side.
 //
-//   zavu agents catalog            # list the factory agents
-//   zavu agents pull fermi         # scaffold ./fermi and register it
-//   zavu agents pull fermi --sender sndr_… --dir agents/fermi
-//   cd fermi && zavu deploy        # ship it
+//   npx zavudev agents catalog            # list the factory agents
+//   npx zavudev agents pull fermi         # scaffold ./fermi and register it
+//   npx zavudev agents pull fermi --sender sndr_… --dir agents/fermi
+//   cd fermi && npx zavudev deploy        # ship it
 
 import { Command } from "commander"
 import prompts from "prompts"
@@ -77,7 +77,7 @@ export function attachFactoryCommands(parent: Command): void {
   parent
     .command("pull <id>")
     .description(
-      "Scaffold a factory agent into your codebase and register it. Then `cd` in and `zavu deploy`."
+      "Scaffold a factory agent into your codebase and register it. Then `cd` in and `npx zavudev deploy`."
     )
     .option("--dir <path>", "Directory to scaffold into (defaults to ./<id>)")
     .option(
@@ -146,8 +146,8 @@ export function attachFactoryCommands(parent: Command): void {
       }
     })
 
-  // `zavu agents init` — the one-command guided setup. Picks (or creates) a
-  // sender, pulls a factory agent, and leaves you ready to `zavu deploy`.
+  // `npx zavudev agents init` — the one-command guided setup. Picks (or creates) a
+  // sender, pulls a factory agent, and leaves you ready to `npx zavudev deploy`.
   parent
     .command("init")
     .description("Guided setup: choose or create a sender, pull a factory agent, get ready to deploy.")
@@ -286,7 +286,7 @@ async function scaffoldTemplate(
         type: "module",
         dependencies: template.dependencies ?? {},
         // Provided by the runtime layer in production; declared so the editor,
-        // `tsc` and `zavu fn invoke` resolve it on the developer's machine.
+        // `tsc` and `npx zavudev fn invoke` resolve it on the developer's machine.
         devDependencies: RUNTIME_DEV_DEPENDENCY,
       },
       null,
@@ -564,7 +564,7 @@ function bumpSlug(base: string, n: number): string {
 }
 
 // PUT a function secret. `buildApi` only exposes get/post/patch/del, so we do
-// the raw fetch here (same pattern as `zavu fn secrets set`).
+// the raw fetch here (same pattern as `npx zavudev fn secrets set`).
 async function setSecret(
   functionId: string,
   key: string,

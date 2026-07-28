@@ -1,5 +1,5 @@
 // Builds an authenticated SDK client from saved credentials.
-// Throws a friendly "run zavu login" error if credentials are missing.
+// Throws a friendly "run npx zavudev login" error if credentials are missing.
 
 import Zavudev from "@zavudev/sdk"
 import { resolveCredentials } from "./config"
@@ -9,7 +9,7 @@ export async function buildClient(): Promise<Zavudev> {
   const creds = await resolveCredentials()
   if (!creds?.apiKey) {
     fail(
-      "Not logged in. Run `zavu login`, or set ZAVUDEV_API_KEY for a non-interactive environment.",
+      "Not logged in. Run `npx zavudev login`, or set ZAVUDEV_API_KEY for a non-interactive environment.",
     )
   }
   return new Zavudev({

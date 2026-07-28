@@ -4,7 +4,7 @@
 // The runtime is provided by the Lambda layer in production, so none of this is
 // required to deploy. It is required for the project to be *workable*: without
 // it, `import { defineAgent } from "@zavudev/functions"` is a red line in the
-// editor, `tsc` cannot resolve it, and `zavu fn invoke` cannot load the module
+// editor, `tsc` cannot resolve it, and `npx zavudev fn invoke` cannot load the module
 // at all. For a product whose pitch is "your TypeScript", that is the entire
 // first impression.
 //
@@ -99,7 +99,7 @@ export const SCAFFOLD_GITIGNORE = [
  * `POST /v1/functions` returns the function, not the project, so both scaffold
  * paths used to write `projectId: ""` into `.zavu/config.json` with a comment
  * saying it was "implicit from the API key". It is implicit to the server, but
- * not to anything reading the file: `zavu fn invoke` falls back to the string
+ * not to anything reading the file: `npx zavudev fn invoke` falls back to the string
  * "project_local", so the local run reports a project that does not exist.
  *
  * `/v1/me` exists precisely to answer "which project is this key bound to".

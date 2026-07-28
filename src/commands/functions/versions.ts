@@ -1,4 +1,4 @@
-// `zavu fn versions …` — browse deployment history and roll back.
+// `npx zavudev fn versions …` — browse deployment history and roll back.
 //
 // The version number is monotonic per function (1, 2, 3, …). `list` shows
 // every deployment with status, who deployed it, when, and whether it's the

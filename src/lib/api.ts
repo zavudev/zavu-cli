@@ -2,7 +2,7 @@
 // Stainless-generated `@zavudev/sdk` only covers a subset of the OpenAPI spec
 // (messages, templates, senders, contacts, broadcasts, introspect at time of
 // writing). The CLI mirrors the full spec, so for everything else we hit the
-// REST API directly with the same Bearer token saved by `zavu login`.
+// REST API directly with the same Bearer token saved by `npx zavudev login`.
 //
 // Use the SDK when it has the method (richer types). Use this when it doesn't.
 
@@ -59,7 +59,7 @@ export async function buildApi(): Promise<ApiClient> {
   const creds = await resolveCredentials()
   if (!creds?.apiKey) {
     fail(
-      "Not logged in. Run `zavu login`, or set ZAVUDEV_API_KEY for a non-interactive environment.",
+      "Not logged in. Run `npx zavudev login`, or set ZAVUDEV_API_KEY for a non-interactive environment.",
     )
   }
   const apiKey = creds!.apiKey
@@ -120,7 +120,7 @@ let announcedNonProd = false
 /**
  * Say out loud when the CLI is not talking to the production API.
  *
- * `zavu login` stores whichever base URL it was pointed at, and a credential
+ * `npx zavudev login` stores whichever base URL it was pointed at, and a credential
  * left over from a dev deployment is invisible afterwards: every command
  * succeeds, against the wrong backend. That produced a full round of "the API
  * does not support this" reports where the feature was live in production the

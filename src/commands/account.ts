@@ -1,4 +1,4 @@
-// `zavu whoami` / `zavu logout` — inspect or clear the saved credentials.
+// `npx zavudev whoami` / `npx zavudev logout` — inspect or clear the saved credentials.
 //
 // `whoami` is essential whenever the dashboard and CLI seem to disagree:
 // it prints the project name the API key is bound to, so the user can
@@ -20,7 +20,7 @@ export function whoamiCommand(): Command {
     .action(async (opts: { json?: boolean }) => {
       const creds = await readCredentials()
       if (!creds?.apiKey) {
-        fail("Not logged in. Run `zavu login` first.")
+        fail("Not logged in. Run `npx zavudev login` first.")
       }
       const api = await buildApi()
       try {

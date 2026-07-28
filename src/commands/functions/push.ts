@@ -1,7 +1,7 @@
-// `zavu functions push` — sync local source + dependencies to the function's
+// `npx zavudev functions push` — sync local source + dependencies to the function's
 // draft without triggering a deploy. Fast (single PATCH, no Build Worker, no
 // Lambda update). Use this for "save my progress" and let the dashboard show
-// the latest code; use `zavu functions deploy` when you actually want the
+// the latest code; use `npx zavudev functions deploy` when you actually want the
 // running function to change.
 
 import { Command } from "commander"
@@ -20,7 +20,7 @@ export function functionsPushCommand(): Command {
       const config = await readProjectConfig()
       if (!config) {
         fail(
-          "No .zavu/config.json found. Run `zavu functions init` first or `cd` into a function directory."
+          "No .zavu/config.json found. Run `npx zavudev functions init` first or `cd` into a function directory."
         )
       }
       const client = await buildClient()
@@ -63,6 +63,6 @@ export function functionsPushCommand(): Command {
         fail(await extractServerError(res, `Push rejected (${res.status})`))
       }
       await ui.scrambleSuccess("Draft updated.")
-      ui.hint("Run `zavu functions deploy` when you're ready to publish.")
+      ui.hint("Run `npx zavudev functions deploy` when you're ready to publish.")
     })
 }

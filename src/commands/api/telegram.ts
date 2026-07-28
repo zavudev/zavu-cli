@@ -1,4 +1,4 @@
-// `zavu telegram` — connect or disconnect a Telegram bot on a sender, fully
+// `npx zavudev telegram` — connect or disconnect a Telegram bot on a sender, fully
 // from the CLI. You still create the bot in Telegram with @BotFather (that's a
 // Telegram step); paste its token here and Zavu validates it, registers the
 // webhook, and routes the sender's Telegram traffic through it.

@@ -116,17 +116,61 @@ async function warnIfSenderCannotSpeak(api: any, senderId: string): Promise<void
   }
 }
 
+/**
+ * Say which agent a `--sender` actually reached, and warn when others are hidden.
+ *
+ * Best-effort: this is a diagnostic aid, so a failure to list agents must not
+ * stop the test that was asked for.
+ */
+async function announceResolvedAgent(
+  api: any,
+  senderId: string,
+  agent: { id: string; name?: string },
+): Promise<void> {
+  ui.hint(`Testing ${agent.name ?? "agent"} (${agent.id})`)
+  try {
+    const res = (await api.get("/v1/agents", { limit: "100" })) as {
+      items?: Array<{ id: string; name?: string; senderIds?: string[] }>
+    }
+    const others = (res.items ?? []).filter(
+      (a) => a.id !== agent.id && (a.senderIds ?? []).includes(senderId),
+    )
+    if (others.length > 0) {
+      const names = others.map((a) => `"${a.name ?? a.id}"`).join(", ")
+      ui.warn(
+        `Sender ${senderId} has ${others.length + 1} agents. Only "${agent.name ?? agent.id}" answers; ` +
+          `${names} cannot be reached and were NOT tested. ` +
+          `Address one directly with ${cli("agents test --agent <agentId>")}.`,
+      )
+    }
+  } catch {
+    // Ignored on purpose: the test itself still ran.
+  }
+}
+
 export function agentsCommand(): Command {
   const cmd = new Command("agents").description("AI agents attached to senders.")
 
   cmd
     .command("get")
-    .description("Show an agent's configuration.")
-    .requiredOption("--sender <senderId>", "Sender ID")
-    .action(async (opts) => {
+    .description("Show an agent's configuration, by agent id or by sender.")
+    // An agent id used to be accepted positionally and silently dropped, so
+    // `agents get <agentId> --sender <senderId>` answered about a DIFFERENT
+    // agent with a 200 and no warning. This is the command you reach for to
+    // check a deploy, so a wrong answer here reads as a verified one.
+    .argument("[agentId]", "Agent ID (from `agents list`)")
+    .option("--sender <senderId>", "Address the agent by its sender instead")
+    .action(async (agentId: string | undefined, opts) => {
+      if (!agentId && !opts.sender) {
+        fail("Pass an agent id (see `agents list`) or --sender <senderId>.")
+      }
       const api = await buildApi()
+      const path = agentId ? `/v1/agents/${agentId}` : agentBase(opts.sender)
+      if (agentId && opts.sender) {
+        ui.hint(`Using agent ${agentId}; --sender ignored.`)
+      }
       try {
-        process.stdout.write(JSON.stringify(await api.get(agentBase(opts.sender)), null, 2) + "\n")
+        process.stdout.write(JSON.stringify(await api.get(path), null, 2) + "\n")
       } catch (err) {
         fail(err instanceof Error ? err.message : String(err))
       }
@@ -243,6 +287,11 @@ export function agentsCommand(): Command {
             return
           }
           agentId = res.agent.id
+          // A sender resolves to exactly one agent, so when several are
+          // attached the others are unreachable and this silently tests the
+          // winner. The reply is fluent and on-topic, which is precisely what
+          // makes it read as a pass for the agent you just deployed.
+          await announceResolvedAgent(api, opts.sender, res.agent)
         } catch (err) {
           fail(err instanceof Error ? err.message : String(err))
           return
@@ -458,7 +507,7 @@ export function agentsCommand(): Command {
     })
 
   // `executions` is a command group with `list` (default) and `get` subcommands.
-  // For backwards-compat we still accept `zavu agents executions --sender X`
+  // For backwards-compat we still accept `npx zavudev agents executions --sender X`
   // (no subcommand) and treat it as `list`.
   const executions = cmd
     .command("executions")
@@ -561,8 +610,8 @@ export function agentsCommand(): Command {
 
   // Reset the agent's conversation context for one contact. Common dev loop:
   //   1. edit code
-  //   2. zavu deploy
-  //   3. zavu agents reset-thread --sender X --contact +1415...
+  //   2. npx zavudev deploy
+  //   3. npx zavudev agents reset-thread --sender X --contact +1415...
   //   4. send a test message — agent starts fresh, no leftover context
   cmd
     .command("reset-thread")
@@ -607,7 +656,7 @@ export function agentsCommand(): Command {
   })
   attachKnowledgeBaseDocuments(kb)
 
-  // Factory agents: `zavu agents catalog` + `zavu agents pull <id>`.
+  // Factory agents: `npx zavudev agents catalog` + `npx zavudev agents pull <id>`.
   attachFactoryCommands(cmd)
 
   return cmd

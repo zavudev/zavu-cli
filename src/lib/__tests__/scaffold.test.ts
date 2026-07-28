@@ -5,7 +5,7 @@ import { join } from "node:path"
 import { writeTsconfig, RUNTIME_DEV_DEPENDENCY, SCAFFOLD_GITIGNORE } from "../scaffold"
 
 // A scaffolded project has to be workable the moment it lands: types resolve,
-// `tsc` passes, `zavu fn invoke` can load the module. None of that is needed to
+// `tsc` passes, `npx zavudev fn invoke` can load the module. None of that is needed to
 // deploy — which is exactly why it went unnoticed that a fresh scaffold opened
 // with a red import on line 1.
 

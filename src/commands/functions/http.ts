@@ -1,4 +1,4 @@
-// `zavu fn info` and `zavu fn http enable|disable`.
+// `npx zavudev fn info` and `npx zavudev fn http enable|disable`.
 //
 // Both exist because the public HTTPS endpoint was, until now, the one step in
 // the Functions lifecycle that could not be done or even *observed* from a
@@ -109,7 +109,7 @@ export function functionsHttpCommand(): Command {
           if (/sourceCode/i.test(msg) && !/httpEnabled/i.test(msg)) {
             fail(
               `${api.baseUrl} is running an API older than this CLI: it does not know httpEnabled.\n` +
-                "  Deploy the backend there, or point the CLI at one that has it (`zavu login --base-url <url>`)."
+                "  Deploy the backend there, or point the CLI at one that has it (`npx zavudev login --base-url <url>`)."
             )
           }
           fail(msg)
