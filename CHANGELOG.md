@@ -7,6 +7,81 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-07-28
+
+### Changed
+
+- **BREAKING: the command is now `zavudev`, not `zavu`.** If you installed
+  globally, `zavu` stops working when you upgrade:
+
+  ```sh
+  npm install -g zavudev@latest
+  zavudev --version
+  ```
+
+  Scripts, CI jobs, and Makefiles that call `zavu` need updating. `npx zavudev`
+  is unaffected and has always been the recommended way to run it. Every usage
+  line, hint, and error message now prints `zavudev`.
+
+- `--version` also tells you when a newer release is published. The check is
+  best-effort and prints to stderr, so `zavudev --version` still pipes just the
+  number.
+
+### Fixed
+
+- `agents get` accepted an agent id and ignored it, answering about whichever
+  agent the `--sender` resolved to instead. Since this is the command you use to
+  confirm a deploy, it could report a different agent's configuration as your
+  own. It now takes an agent id: `zavudev agents get <agentId>`.
+
+- `agents test --sender` did not say which agent it reached. A sender resolves to
+  exactly one agent, so with several attached you were testing one and reading
+  the reply as proof about another. It now names the agent it tested, and warns
+  which ones on that sender cannot be reached.
+
+- New projects scaffolded without `@zavudev/sdk` in their dependencies, so the
+  generated code failed to run before you had changed anything.
+
+## [0.9.5] - 2026-07-27
+
+### Added
+
+- Voice on an agent, from the terminal: `agents create --voice`, with
+  `--voice-greeting`, `--voice-language`, `--voice-id` and `--voice-transfer-to`.
+  `agents update` takes the same flags plus `--no-voice`.
+- `agents voices` lists the voices an agent can speak with, filterable by
+  `--language`. Previously the only way to find a valid voice id was to open the
+  dashboard.
+- `senders create --enable-voice`, and real flags on `senders update`
+  (`--name`, `--enable-voice`, `--disable-voice`, `--set-default`) instead of
+  hand-written JSON.
+- `phone-numbers search --capabilities voice,sms` filters to numbers that have
+  all of them.
+
+### Changed
+
+- `senders create --phone` now attaches the number to the sender, so the sender
+  can actually send. It requires a number your project owns and returns an error
+  for one it does not, rather than creating a sender with no channels.
+- `deploy` no longer prints a green success line when your declarations failed
+  to sync. Read the lines above it.
+
+### Fixed
+
+- `init` refused to use a directory that already existed, including an empty one,
+  which broke `mkdir my-agent && cd my-agent && zavudev init`.
+- `fn logs` printed nothing at all when there were no logs in the window, which
+  was indistinguishable from a broken command. It now says so and suggests
+  `--since`.
+
+## [0.9.4] - 2026-07-27
+
+### Fixed
+
+- `phone-numbers search` reported `$0` for every number on one provider while the
+  purchase charged the real price. Search now quotes what you will be charged.
+- Owned numbers reported themselves as SMS-only even when provisioned for calls.
+
 ### Changed
 
 - `agents executions` and `agents stats` now state that they cover messaging only.
