@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.1] - 2026-08-02
+
+### Fixed
+
+- The npm package now actually ships `@zavudev/sdk` 0.51.0. The CLI bundles
+  the SDK into `dist/zavu.js` at build time, and 0.10.0 was published before
+  the dependency bump landed, so its embedded client was older than the range
+  in `package.json` claimed. Rebuilt and republished; no CLI behavior changes.
+
 ## [0.10.0] - 2026-07-28
 
 ### Changed
