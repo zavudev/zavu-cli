@@ -9,6 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `zavudev agents tools test <toolId>` runs one tool now and prints what it
+  answered: the status, the body and how long it took. Running a tool was
+  REST-only, so the way to check whether a tool worked was to write a curl.
+  A tool that answers with an error is reported as a failed run rather than as
+  a success. It calls the real webhook, so it has whatever side effects the
+  tool has.
+- `zavudev agents tools test-runs <toolId>` lists the recent runs of that tool,
+  with the reason on screen for the ones that failed. Manual tests only: a tool
+  called by the agent during a real conversation is not listed there.
+- `zavudev agents executions` shows a `tools` column with how many tools the
+  agent called on each reply. A zero on a reply that promised a lookup is the
+  answer to "it said it would fetch something and nothing reached my server".
+  Executions recorded before this existed show `—`, which is not the same as
+  zero.
+
 - `zavudev import <repo>` brings an agent project in from GitHub and deploys it
   in one command. It accepts `owner/repo`, `owner/repo#ref`, and github.com
   URLs, detects the project type automatically, and supports monorepos via

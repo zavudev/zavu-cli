@@ -774,6 +774,132 @@ function attachToolsSubResource(parent: Command) {
         fail(err instanceof Error ? err.message : String(err))
       }
     })
+
+  // Running a tool was REST-only, so the answer to "my agent says it will look
+  // something up and nothing reaches my server" was: write a curl. This is the
+  // one check that separates a broken tool from a model that never called it,
+  // and it belongs where the rest of the debugging happens.
+  sub
+    .command("test <toolId>")
+    .description("Run a tool now and print what it answered. This calls the real webhook.")
+    .requiredOption("--sender <senderId>", "Sender ID")
+    .option("--params <json>", "Arguments to call the tool with", "{}")
+    .option("--params-file <path>", "Read the arguments from a JSON file")
+    .option("--json", "Print the raw response")
+    .action(async (toolId, opts) => {
+      let params: Record<string, unknown>
+      if (opts.paramsFile) {
+        const { readFile } = await import("node:fs/promises")
+        const raw = await readFile(opts.paramsFile, "utf8")
+        try {
+          params = JSON.parse(raw)
+        } catch (err) {
+          fail(`${opts.paramsFile}: ${err instanceof Error ? err.message : String(err)}`)
+          return
+        }
+      } else {
+        try {
+          params = JSON.parse(opts.params)
+        } catch (err) {
+          fail(`--params is not valid JSON: ${err instanceof Error ? err.message : String(err)}`)
+          return
+        }
+      }
+
+      const api = await buildApi()
+      try {
+        const res = await api.post<{ run?: ToolTestRun }>(
+          `${agentBase(opts.sender)}/tools/${toolId}/test`,
+          { testParams: params }
+        )
+        if (opts.json) {
+          process.stdout.write(JSON.stringify(res, null, 2) + "\n")
+          return
+        }
+        printToolRun(res.run)
+      } catch (err) {
+        fail(err instanceof Error ? err.message : String(err))
+      }
+    })
+
+  sub
+    .command("test-runs <toolId>")
+    .description("Recent runs of this tool from `tools test`. Live agent calls are not listed.")
+    .requiredOption("--sender <senderId>", "Sender ID")
+    .option("--limit <n>", "How many to show", "10")
+    .option("--json", "Print the raw response")
+    .action(async (toolId, opts) => {
+      const api = await buildApi()
+      try {
+        const res = await api.get<{ items?: ToolTestRun[] }>(
+          `${agentBase(opts.sender)}/tools/${toolId}/test-runs`,
+          { limit: opts.limit }
+        )
+        if (opts.json) {
+          process.stdout.write(JSON.stringify(res, null, 2) + "\n")
+          return
+        }
+        if (!res.items?.length) {
+          ui.info("No runs yet.")
+          ui.hint(`Run one with ${cli("agents tools test <toolId> --sender <senderId>")}`)
+          return
+        }
+        ui.table(
+          res.items.map((r) => ({
+            when: r.createdAt ?? "—",
+            result: r.success ? "ok" : "failed",
+            http: r.statusCode == null ? "—" : String(r.statusCode),
+            ms: String(r.durationMs ?? "—"),
+          }))
+        )
+        // The reason a run failed is the whole point of looking, so it goes on
+        // screen rather than behind --json.
+        for (const r of res.items.filter((x) => !x.success && x.error)) {
+          ui.hint(`${r.createdAt ?? ""}  ${String(r.error).slice(0, 200)}`)
+        }
+      } catch (err) {
+        fail(err instanceof Error ? err.message : String(err))
+      }
+    })
+}
+
+export interface ToolTestRun {
+  id?: string
+  success?: boolean
+  statusCode?: number | null
+  response?: string | null
+  error?: string | null
+  durationMs?: number
+  createdAt?: string
+}
+
+/**
+ * One run, printed so the outcome is unmissable.
+ *
+ * A tool that answered with a non-2xx is a FAILED run, not a failed command:
+ * the endpoint returns 200 either way. Printing "ok" for both is how the old
+ * `{"scheduled": true}` misled people, so success and failure have to look
+ * different here.
+ */
+export function printToolRun(run: ToolTestRun | undefined): void {
+  if (!run) {
+    fail("The API did not return a run.")
+    return
+  }
+  const http = run.statusCode == null ? "no response" : `HTTP ${run.statusCode}`
+  if (run.success) {
+    ui.success(`Ran in ${run.durationMs ?? "?"}ms · ${http}`)
+  } else {
+    ui.warn(`Failed after ${run.durationMs ?? "?"}ms · ${http}`)
+  }
+  if (run.response) {
+    ui.info("Response:")
+    process.stdout.write(run.response + "\n")
+  }
+  if (run.error) {
+    ui.info("Error:")
+    process.stdout.write(run.error + "\n")
+  }
 }
 
 async function buildToolBodyFromFlags(
