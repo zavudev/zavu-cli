@@ -14,6 +14,53 @@ export interface CliFunctionTemplate {
   requiredSecrets: { key: string; hint: string }[]
 }
 
+const AGENT = `// An agent and one tool. This is the shape the guides and skills teach:
+// defineAgent + defineTool register themselves at module load, and
+// \`npx zavudev deploy\` reconciles the live agent and tools to match. Your
+// source is the source of truth.
+
+import { defineAgent, defineTool } from "@zavudev/functions"
+
+// SENDER_ID is the sender this agent answers on. Find it with
+// \`npx zavudev senders list\`, then set it with
+// \`npx zavudev fn secrets set SENDER_ID <id>\`.
+defineAgent({
+  senderId: process.env.SENDER_ID!,
+  name: "Support",
+  provider: "zavu",
+  model: "gpt-4o-mini",
+  prompt: \`You are a support agent.
+
+When someone asks about an order, call get_order_status and answer with what it
+returns. Never invent a status or a date.\`,
+})
+
+// The model reads 'description' to decide WHEN to call this, so be precise.
+// 'parameters' is plain JSON Schema. The handler runs in your function and can
+// return any JSON-serializable value.
+//
+// Tools are offered on every channel, including plain text, and the model may
+// chain up to 5 tool rounds in a single reply.
+defineTool({
+  name: "get_order_status",
+  description:
+    "Look up the delivery status of one order by its id. Call this whenever a customer asks where their order is.",
+  parameters: {
+    type: "object",
+    properties: {
+      orderId: { type: "string", description: "The order id, e.g. ORD-4417" },
+    },
+    required: ["orderId"],
+  },
+  // Replace this with a real lookup against your backend.
+  handler: async (args) => ({
+    orderId: args.orderId,
+    status: "in_transit",
+    expectedDelivery: "2 to 3 business days",
+  }),
+})
+`
+
 const BLANK = `import { defineFunction } from "@zavudev/functions"
 import Zavudev from "@zavudev/sdk"
 
@@ -231,12 +278,34 @@ defineTool({
 `
 
 export const TEMPLATES: CliFunctionTemplate[] = [
+  // First entry is the default when `--template` is omitted, so it is also the
+  // answer to "what does a Zavu function look like?". That used to be the echo
+  // bot, which is `defineFunction` — a different programming model from the
+  // `defineAgent` + `defineTool` shape every guide and skill teaches. Someone
+  // scaffolding to learn the shape was handed the one file that does not use
+  // it.
+  {
+    id: "agent",
+    name: "Agent with a tool",
+    emoji: "◇",
+    defaultSlug: "agent",
+    summary: "Declarative agent: defineAgent + defineTool. The smallest useful shape.",
+    dependencies: {},
+    code: AGENT,
+    requiredSecrets: [
+      {
+        key: "SENDER_ID",
+        hint: "ID of the sender this agent answers on (from `npx zavudev senders list`).",
+      },
+    ],
+  },
   {
     id: "blank",
     name: "Echo demo",
     emoji: "✨",
     defaultSlug: "echo",
-    summary: "Minimal echo bot. Replies to any inbound message.",
+    summary:
+      "Minimal echo bot. Uses defineFunction (raw event handling), not the agent shape.",
     dependencies: {},
     code: BLANK,
     requiredSecrets: [],

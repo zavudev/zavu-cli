@@ -1,23 +1,32 @@
-// `npx zavudev functions deploy` — read the local index.ts + package.json, push them
-// to Zavu's deploy pipeline, stream status until active.
+// `npx zavudev functions deploy` — figure out what kind of project the current
+// directory holds, produce a single sourceCode, and push it to Zavu's deploy
+// pipeline.
 //
-// The actual bundling (esbuild + npm install) happens server-side in the
-// Build Worker Lambda — the CLI just sends source + declared deps. This
-// keeps the CLI's compiled binary tiny (no esbuild bundled) and means
-// deploys are reproducible regardless of the dev's local environment.
+// Two project formats deploy today:
+//   - Zavu native: a root index.ts. Sent as-is; the server-side Build Worker
+//     (esbuild + npm install) does all bundling, exactly as before.
+//   - eve layout: agent/instructions.md + agent/tools/*. Compiled client-side
+//     into one module (see lib/frameworks.ts) and shipped through the same
+//     endpoint — the server cannot tell the difference.
 
 import { Command } from "commander"
 import { readFile } from "node:fs/promises"
-import { join } from "node:path"
+import { basename, join } from "node:path"
 import { buildClient } from "../../lib/client"
-import { buildApi } from "../../lib/api"
-import { readProjectConfig } from "../../lib/config"
-import { ui, fail, extractServerError } from "../../lib/ui"
+import { readProjectConfig, writeProjectConfig } from "../../lib/config"
+import { registerFunction, deriveFunctionIdentity } from "../../lib/registerFunction"
+import { ui, fail } from "../../lib/ui"
+import { deployAndWait } from "../../lib/deployRun"
+import { detectFramework, compileEveProject, printEveReport } from "../../lib/frameworks"
 
 export function functionsDeployCommand(): Command {
   return new Command("deploy")
-    .description("Deploy the function in the current directory.")
+    .description("Deploy the function in the current directory (Zavu native or eve layout).")
     .option("--source <file>", "Source file relative to cwd", "index.ts")
+    .option(
+      "--sender <senderId>",
+      "Sender the agent answers on (eve projects; inlined at compile time). Falls back to the SENDER_ID secret."
+    )
     .option(
       "--update-runtime",
       "Bump this function to the latest runtime layer. Default: keep pinned to the runtime it last deployed against."
@@ -26,215 +35,146 @@ export function functionsDeployCommand(): Command {
       "--arch <arch>",
       "CPU architecture: arm64 (default, cheapest) or x86_64 (+25% cost, broader native-module compat)."
     )
+    .option(
+      "--name <name>",
+      "Name for a project being deployed for the first time. Defaults to package.json's name, then the directory name."
+    )
+    .option("--slug <slug>", "Slug for a project being deployed for the first time. Derived from the name when omitted.")
     .option("--watch", "(future) keep running and redeploy on file changes")
-    .action(async (opts: { source: string; watch?: boolean; updateRuntime?: boolean; arch?: string }) => {
-      if (opts.watch) {
-        fail("--watch is not implemented yet. Use `npx zavudev functions invoke` for local iteration.")
-      }
-      const config = await readProjectConfig()
-      if (!config) {
-        fail("No .zavu/config.json found. Run `npx zavudev functions init` first or `cd` into a function directory.")
-      }
-      const client = await buildClient()
-
-      let sourceCode: string
-      try {
-        sourceCode = await readFile(join(process.cwd(), opts.source), "utf8")
-      } catch {
-        fail(`Could not read ${opts.source}. Pass --source <file> if your entrypoint is named differently.`)
-      }
-
-      // Read declared dependencies + the optional `zavu` config block from
-      // package.json. The server's Build Worker installs the deps; the `zavu`
-      // block lets users pin architecture etc. directly in source control.
-      let dependencies: Record<string, string> = {}
-      let pkgArch: string | undefined
-      try {
-        const pkgRaw = await readFile(join(process.cwd(), "package.json"), "utf8")
-        const pkg = JSON.parse(pkgRaw) as {
-          dependencies?: Record<string, string>
-          zavu?: { architecture?: string }
+    .action(
+      async (opts: {
+        source: string
+        sender?: string
+        name?: string
+        slug?: string
+        watch?: boolean
+        updateRuntime?: boolean
+        arch?: string
+      }) => {
+        if (opts.watch) {
+          fail("--watch is not implemented yet. Use `npx zavudev functions invoke` for local iteration.")
         }
-        dependencies = pkg.dependencies ?? {}
-        pkgArch = pkg.zavu?.architecture
-      } catch {
-        // No package.json — fine for templates with zero deps.
-      }
+        const client = await buildClient()
+        const cwd = process.cwd()
 
-      // Architecture precedence: CLI flag > package.json > server default (arm64).
-      // Validate so we surface bad input before the deploy round-trip.
-      const archInput = opts.arch ?? pkgArch
-      let architecture: "arm64" | "x86_64" | undefined
-      if (archInput !== undefined) {
-        if (archInput !== "arm64" && archInput !== "x86_64") {
-          fail(`Invalid --arch "${archInput}". Use "arm64" (default) or "x86_64".`)
-        }
-        architecture = archInput
-      }
-
-      ui.step(`Deploying ${config!.name} (${config!.slug})…`)
-      const startedAt = Date.now()
-
-      const res = await fetch(
-        `${client.baseURL}/v1/functions/${config!.functionId}/deploy`,
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${client.apiKey}`,
-          },
-          body: JSON.stringify({
-            sourceCode,
-            dependencies,
-            ...(architecture ? { architecture } : {}),
-            ...(opts.updateRuntime ? { updateRuntime: true } : {}),
-          }),
-        }
-      )
-      if (!res.ok) {
-        fail(await extractServerError(res, `Deploy request rejected (${res.status})`))
-      }
-      const created = (await res.json()) as { deployment?: { id: string } }
-      const deploymentId = created.deployment?.id
-      if (!deploymentId) {
-        fail("Server did not return a deployment id.")
-      }
-      ui.hint(`deployment id: ${deploymentId}`)
-
-      // Poll deployment status until terminal. The server's deploy action
-      // updates `status` through bundling → uploading → publishing → active|failed.
-      let lastStatus = ""
-      while (true) {
-        await sleep(1500)
-        const detailRes = await fetch(
-          `${client.baseURL}/v1/functions/deployments/${deploymentId}`,
-          { headers: { Authorization: `Bearer ${client.apiKey}` } }
-        )
-        if (!detailRes.ok) {
-          ui.warn(`Status poll failed (${detailRes.status}); will retry…`)
-          continue
-        }
-        const detailJson = (await detailRes.json()) as {
-          deployment?: {
-            status: string
-            errorMessage?: string | null
-            reconcileSummary?: ReconcileSummary | null
-            reconcileWarning?: string | null
+        // Read declared dependencies + the optional `zavu` config block from
+        // package.json. The server's Build Worker installs the deps; the `zavu`
+        // block lets users pin architecture etc. directly in source control.
+        let pkgDependencies: Record<string, string> = {}
+        let pkgArch: string | undefined
+        let pkgName: string | undefined
+        try {
+          const pkgRaw = await readFile(join(cwd, "package.json"), "utf8")
+          const pkg = JSON.parse(pkgRaw) as {
+            name?: string
+            dependencies?: Record<string, string>
+            zavu?: { architecture?: string }
           }
+          pkgDependencies = pkg.dependencies ?? {}
+          pkgArch = pkg.zavu?.architecture
+          pkgName = pkg.name
+        } catch {
+          // No package.json — fine for templates with zero deps.
         }
-        const d = detailJson.deployment
-        if (!d) {
-          ui.warn("Status poll returned no deployment; will retry…")
-          continue
-        }
-        if (d.status !== lastStatus) {
-          ui.step(`status: ${d.status}`)
-          lastStatus = d.status
-        }
-        if (d.status === "active") {
-          // The summary goes BEFORE the success line. Under a green ✓ nobody
-          // reads it, and the things it reports — tools that will never fire,
-          // a second agent shadowing the first, a manifest probe that threw —
-          // are precisely the ones that make a "successful" deploy a lie.
-          printReconcileSummary(d.reconcileSummary, d.reconcileWarning)
-          const elapsed = `${((Date.now() - startedAt) / 1000).toFixed(1)}s`
-          // A green ✓ between the error above and the warning below read as a
-          // clean deploy that happened to print something. The tick is only
-          // earned when everything in the source actually synced.
-          if (d.reconcileWarning) {
-            ui.warn(`Deployed with errors in ${elapsed}.`)
-          } else {
-            await ui.scrambleSuccess(`Deployed in ${elapsed}`)
-          }
-          // The URL lives on the server, not in .zavu/config.json — which is
-          // written at scaffold time and never carries it. Reading the local
-          // file meant this line could not fire, so `--http` produced an
-          // endpoint with no way to discover its address.
+
+        // Format detection. An explicitly passed --source always means the
+        // classic single-file flow — never reinterpret what the user named.
+        const sourceExplicit = opts.source !== "index.ts"
+        const detection = await detectFramework(cwd)
+
+        let sourceCode: string
+        let dependencies: Record<string, string>
+
+        if (!sourceExplicit && detection.framework === "eve") {
+          ui.step(`eve project detected (${detection.evidence}) — compiling…`)
+          let compiled
           try {
-            const api = await buildApi()
-            const fn = await api.get<{
-              function?: { httpEnabled?: boolean; publicUrl?: string | null }
-            }>(`/v1/functions/${config!.functionId}`)
-            if (fn.function?.httpEnabled && fn.function.publicUrl) {
-              ui.info(`Public URL: ${fn.function.publicUrl}`)
-            }
+            compiled = await compileEveProject(cwd, { senderId: opts.sender })
+          } catch (err) {
+            fail(err instanceof Error ? err.message : String(err))
+          }
+          printEveReport(compiled!.analysis, { sender: opts.sender })
+          sourceCode = compiled!.sourceCode
+          dependencies = compiled!.dependencies
+        } else {
+          try {
+            sourceCode = await readFile(join(cwd, opts.source), "utf8")
           } catch {
-            // Never fail a successful deploy over a cosmetic lookup.
+            if (detection.framework === "unknown") {
+              fail(
+                `Could not read ${opts.source}, and this directory is neither a Zavu function (index.ts) nor an eve project (agent/instructions.md). Pass --source <file> if your entrypoint is named differently.`
+              )
+            }
+            fail(`Could not read ${opts.source}. Pass --source <file> if your entrypoint is named differently.`)
           }
-          // The Lambda is live either way, so this is not `fail()`. But a
-          // probe that threw means the agents and tools in the source were
-          // never synced, and a script that only checks the exit code must not
-          // read that as success.
-          if (d.reconcileWarning) {
-            ui.warn(
-              "The declarations in your source were NOT synced. The function is live, but its agents and tools are unchanged. Fix the error above and deploy again."
+          dependencies = pkgDependencies
+        }
+
+        // First deploy of a project that exists on disk but not yet in Zavu.
+        //
+        // `init` scaffolds into an empty directory, so it cannot adopt a project
+        // you already wrote — and an eve project you cloned or authored by hand
+        // had no door at all: `init` refused the non-empty directory and
+        // `import` only speaks GitHub. Registering here closes that gap; the
+        // directory is already proven to be a real project by the detection
+        // above, which is the only thing registration was ever waiting on.
+        let config = await readProjectConfig()
+        if (!config) {
+          if (detection.framework === "unknown" && !sourceExplicit) {
+            fail(
+              "This directory is neither a Zavu function (index.ts) nor an eve project (agent/instructions.md). Run `npx zavudev functions init` to start a new one, or `cd` into a function directory."
             )
-            process.exitCode = 1
           }
-          return
+          const { name, slug: requestedSlug } = deriveFunctionIdentity({
+            flagName: opts.name,
+            flagSlug: opts.slug,
+            pkgName,
+            dirName: basename(cwd),
+          })
+          if (!requestedSlug) {
+            fail(`Could not derive a slug from "${name}". Pass --slug <slug>.`)
+          }
+          ui.step(`First deploy: registering "${name}" in your Zavu project…`)
+          const registered = await registerFunction(client, {
+            name,
+            slug: requestedSlug,
+            sourceCode: sourceCode!,
+            dependencies: dependencies!,
+          })
+          if (registered.slug !== requestedSlug) {
+            ui.warn(`Slug "${requestedSlug}" was taken. Using "${registered.slug}".`)
+          }
+          config = {
+            projectId: registered.projectId,
+            functionId: registered.functionId,
+            slug: registered.slug,
+            name,
+            ...(registered.publicUrl ? { publicUrl: registered.publicUrl } : {}),
+          }
+          await writeProjectConfig(config, cwd)
+          ui.step(`Wrote .zavu/config.json — later deploys reuse it.`)
         }
-        if (d.status === "failed") {
-          fail(d.errorMessage ?? "Deploy failed.")
+
+        // Architecture precedence: CLI flag > package.json > server default (arm64).
+        // Validate so we surface bad input before the deploy round-trip.
+        const archInput = opts.arch ?? pkgArch
+        let architecture: "arm64" | "x86_64" | undefined
+        if (archInput !== undefined) {
+          if (archInput !== "arm64" && archInput !== "x86_64") {
+            fail(`Invalid --arch "${archInput}". Use "arm64" (default) or "x86_64".`)
+          }
+          architecture = archInput as "arm64" | "x86_64"
         }
+
+        await deployAndWait({
+          client,
+          functionId: config!.functionId,
+          label: `${config!.name} (${config!.slug})`,
+          sourceCode: sourceCode!,
+          dependencies: dependencies!,
+          architecture,
+          updateRuntime: opts.updateRuntime,
+        })
       }
-    })
-}
-
-// Shape of `deployment.reconcileSummary` from the backend. Populated when the
-// user's source code calls `defineAgent` / `defineTool` — undefined / null
-// when there's nothing to sync (then we render nothing).
-interface ReconcileSummary {
-  agentsCreated: string[]
-  agentsUpdated: string[]
-  /** Present since the reconcile learned to diff. Older servers omit it. */
-  agentsUnchanged?: string[]
-  agentsDeleted: string[]
-  toolsCreated: string[]
-  toolsUpdated: string[]
-  toolsUnchanged?: string[]
-  toolsDeleted: string[]
-  warnings: string[]
-}
-
-function printReconcileSummary(
-  summary: ReconcileSummary | null | undefined,
-  warning: string | null | undefined
-): void {
-  if (!summary && !warning) return
-  if (summary) {
-    const agentsTouched =
-      summary.agentsCreated.length +
-      summary.agentsUpdated.length +
-      (summary.agentsUnchanged?.length ?? 0) +
-      summary.agentsDeleted.length
-    const toolsTouched =
-      summary.toolsCreated.length +
-      summary.toolsUpdated.length +
-      (summary.toolsUnchanged?.length ?? 0) +
-      summary.toolsDeleted.length
-    // `=` for unchanged. Previously everything that already existed printed as
-    // `~`, so a redeploy with no source change was indistinguishable from one
-    // that rewrote the prompt — and the only way to confirm an edit had landed
-    // was to run `agents test` with a sentinel word in it.
-    if (agentsTouched > 0) {
-      ui.info("Agents synced:")
-      for (const n of summary.agentsCreated) ui.hint(`  + ${n}`)
-      for (const n of summary.agentsUpdated) ui.hint(`  ~ ${n}`)
-      for (const n of summary.agentsUnchanged ?? []) ui.hint(`  = ${n} (unchanged)`)
-      for (const n of summary.agentsDeleted) ui.hint(`  - ${n}`)
-    }
-    if (toolsTouched > 0) {
-      ui.info("Tools synced:")
-      for (const n of summary.toolsCreated) ui.hint(`  + ${n}`)
-      for (const n of summary.toolsUpdated) ui.hint(`  ~ ${n}`)
-      for (const n of summary.toolsUnchanged ?? []) ui.hint(`  = ${n} (unchanged)`)
-      for (const n of summary.toolsDeleted) ui.hint(`  - ${n}`)
-    }
-    for (const w of summary.warnings) ui.warn(w)
-  }
-  if (warning) ui.warn(`manifest probe: ${warning}`)
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms))
+    )
 }

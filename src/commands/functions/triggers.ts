@@ -17,6 +17,8 @@ interface Trigger {
   eventType: string
   senderId: string | null
   active: boolean
+  /** 5-field UTC cron expression; only on cron triggers. */
+  cron?: string | null
 }
 
 async function api<T>(
@@ -96,19 +98,23 @@ export function functionsTriggersCommand(): Command {
   cmd
     .command("add")
     .description(
-      "Bind events to the function. Cartesian over --events × --senders."
+      "Bind events to the function. Cartesian over --events × --senders. Use --events cron --cron '<expr>' for a schedule."
     )
     .option("--function <id>", "Function ID (defaults to .zavu/config.json)")
     .requiredOption(
       "--events <list>",
-      "Comma-separated event types (e.g. message.inbound,message.delivered)"
+      "Comma-separated event types (e.g. message.inbound,message.delivered, or cron)"
     )
     .option(
       "--senders <list>",
       "Comma-separated sender IDs. Use 'any' as an entry for 'all senders'.",
       "any"
     )
-    .action(async (opts: { function?: string; events: string; senders: string }) => {
+    .option(
+      "--cron <expr>",
+      "5-field cron expression (UTC), required when --events includes 'cron'. Example: '*/15 * * * *'"
+    )
+    .action(async (opts: { function?: string; events: string; senders: string; cron?: string }) => {
       const functionId = await resolveFunctionId(opts.function)
       const eventTypes = opts.events
         .split(",")
@@ -122,6 +128,12 @@ export function functionsTriggersCommand(): Command {
 
       if (eventTypes.length === 0) fail("Pass at least one --events entry.")
       if (senderIds.length === 0) fail("Pass at least one --senders entry (or 'any').")
+      if (eventTypes.includes("cron") && !opts.cron) {
+        fail("--events cron needs --cron '<5-field expression>' (UTC), e.g. --cron '0 9 * * 1-5'.")
+      }
+      if (opts.cron && !eventTypes.includes("cron")) {
+        fail("--cron only applies with --events cron.")
+      }
 
       const res = await api<{
         added: number
@@ -130,6 +142,7 @@ export function functionsTriggersCommand(): Command {
       }>("POST", `/v1/functions/${functionId}/triggers`, {
         eventTypes,
         senderIds,
+        ...(opts.cron ? { cron: opts.cron } : {}),
       })
       ui.success(
         `Added ${res.added} trigger${res.added === 1 ? "" : "s"}` +
@@ -138,7 +151,7 @@ export function functionsTriggersCommand(): Command {
       ui.table(
         res.triggers.map((t) => ({
           id: t.id,
-          event: t.eventType,
+          event: t.cron ? `cron ${t.cron}` : t.eventType,
           sender: t.senderId ?? "(any)",
           active: t.active ? "yes" : "no",
         }))

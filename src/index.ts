@@ -29,6 +29,7 @@ import { loginCommand } from "./commands/login"
 import { whoamiCommand, logoutCommand } from "./commands/account"
 import { functionsCommand } from "./commands/functions"
 import { functionsInitCommand } from "./commands/functions/init"
+import { functionsImportCommand } from "./commands/functions/import"
 import { functionsPushCommand } from "./commands/functions/push"
 import { functionsDeployCommand } from "./commands/functions/deploy"
 import { functionsInvokeCommand } from "./commands/functions/invoke"
@@ -78,6 +79,7 @@ program.addCommand(loginCommand())
 program.addCommand(whoamiCommand())
 program.addCommand(logoutCommand())
 program.addCommand(functionsInitCommand())
+program.addCommand(functionsImportCommand())
 program.addCommand(functionsPushCommand())
 program.addCommand(functionsDeployCommand())
 program.addCommand(functionsInvokeCommand())

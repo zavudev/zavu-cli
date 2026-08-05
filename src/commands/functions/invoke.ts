@@ -17,8 +17,9 @@ import { readFile, writeFile, mkdir, rm, stat } from "node:fs/promises"
 import { join, dirname, resolve } from "node:path"
 import { tmpdir } from "node:os"
 import { randomBytes } from "node:crypto"
-import { readProjectConfig, readCredentials } from "../../lib/config"
+import { readProjectConfig, resolveCredentials } from "../../lib/config"
 import { buildApi } from "../../lib/api"
+import { detectFramework, compileEveProject } from "../../lib/frameworks"
 import { ui, fail } from "../../lib/ui"
 
 interface InvokeOpts {
@@ -49,7 +50,10 @@ export function functionsInvokeCommand(): Command {
     .option("--args-file <path>", "Path to a JSON file for the tool's arguments")
     .action(async (opts: InvokeOpts) => {
       const config = await readProjectConfig()
-      const creds = await readCredentials()
+      // Resolved, so `--live` uses the credentials the rest of the CLI is
+      // using. Reading the file meant an env-var session ran "live" against
+      // whatever key happened to be stored, or none at all.
+      const creds = await resolveCredentials()
 
       // ── Tool-dispatch mode ────────────────────────────────────────────────
       // When --tool is passed, we ignore event/data and instead call a
@@ -108,7 +112,40 @@ export function functionsInvokeCommand(): Command {
       // and `@zavudev/functions` then fails to resolve. That failure surfaced as the
       // module never loading, which in turn made the registry look empty and
       // printed the thoroughly misleading "available tools: (none)".
-      const projectDir = dirname(resolve(process.cwd(), opts.source))
+      // An eve project has no index.ts, so the default source would send the
+      // runner looking for a file that cannot exist — and `agents test` and the
+      // published skill both tell you to run exactly this command to exercise
+      // an eve tool. Compiling first gives the runner the same generated entry
+      // the deploy path uses, so a tool behaves here the way it will in
+      // production. An explicit --source is always honoured verbatim.
+      let effectiveSource = opts.source
+      let isEve = false
+      if (opts.source === "index.ts") {
+        const detection = await detectFramework(process.cwd())
+        if (detection.framework === "eve") {
+          ui.step(`eve project detected (${detection.evidence}) — compiling…`)
+          let compiled
+          try {
+            compiled = await compileEveProject(process.cwd())
+          } catch (err) {
+            fail(err instanceof Error ? err.message : String(err))
+          }
+          // Run the bundle, not the generated entry. The bundle is what deploy
+          // ships, and it has `eve` already resolved to the compat layer — the
+          // entry still imports `eve` by name, which an eve project does have
+          // but only as a build-time dependency we compile away. Running the
+          // same artifact is also the only way a local result is evidence
+          // about production.
+          effectiveSource = join(".zavu", "eve-invoke.ts")
+          await writeFile(join(process.cwd(), effectiveSource), compiled!.sourceCode, "utf8")
+          isEve = true
+        }
+      }
+
+      // The generated entry already lives in `.zavu/`, so deriving the project
+      // root from its dirname would nest the runner one level deeper and put it
+      // somewhere the project's tsconfig no longer applies.
+      const projectDir = isEve ? process.cwd() : dirname(resolve(process.cwd(), effectiveSource))
       const runnerDir = join(projectDir, ".zavu")
       await mkdir(runnerDir, { recursive: true })
       const runnerPath = join(runnerDir, `invoke-${randomBytes(4).toString("hex")}.ts`)
@@ -118,7 +155,7 @@ export function functionsInvokeCommand(): Command {
       // globalThis.__ZAVU_REGISTRY). In tool mode we then read the registry
       // and call the named tool's handler. In event mode we call the
       // module's default export (if any).
-      const sourcePath = join(process.cwd(), opts.source).replace(/\\/g, "/")
+      const sourcePath = join(process.cwd(), effectiveSource).replace(/\\/g, "/")
       const runnerSource = `
 // Import the user module — defineAgent / defineTool fire here.
 import * as userModule from "${sourcePath}"
@@ -301,9 +338,19 @@ try {
       try {
         await stat(join(projectDir, "node_modules", "@zavudev", "functions"))
       } catch {
-        ui.warn("Dependencies are not installed in this project.")
-        ui.hint(`Run \`npm install\` in ${projectDir}, then try again.`)
-        ui.hint("(Deploy does not need it; local invoke and tsc do.)")
+        // An eve project never declares @zavudev/functions — the compat layer
+        // the compile step generates is what pulls it in. So `npm install`
+        // alone can never satisfy this, and saying so sends the user in a
+        // circle they have usually already run.
+        if (isEve) {
+          ui.warn("Running an eve tool locally needs the Zavu runtime package.")
+          ui.hint(`Run \`npm install @zavudev/functions\` in ${projectDir}, then try again.`)
+          ui.hint("(Only local invoke needs it. Deploying installs it for you.)")
+        } else {
+          ui.warn("Dependencies are not installed in this project.")
+          ui.hint(`Run \`npm install\` in ${projectDir}, then try again.`)
+          ui.hint("(Deploy does not need it; local invoke and tsc do.)")
+        }
         process.exit(2)
       }
 

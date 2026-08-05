@@ -6,6 +6,7 @@
 //
 // Use the SDK when it has the method (richer types). Use this when it doesn't.
 
+import kleur from "kleur"
 import { resolveCredentials } from "./config"
 import { fail, ui } from "./ui"
 
@@ -133,5 +134,8 @@ function warnIfNotProduction(baseUrl: string): void {
   if (announcedNonProd) return
   if (/^https:\/\/api\.zavu\.dev$/i.test(baseUrl)) return
   announcedNonProd = true
-  ui.hint(`↯ using ${baseUrl} (not the production API)`)
+  // stderr, not stdout: this line is for the human, and on stdout it lands
+  // inside `--json` output, so every script that pipes a command into a JSON
+  // parser breaks the moment it points somewhere other than production.
+  process.stderr.write(`  ${kleur.gray(`↯ using ${baseUrl} (not the production API)`)}\n`)
 }

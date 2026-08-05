@@ -13,6 +13,7 @@
 import { Command } from "commander"
 import { buildApi } from "../../lib/api"
 import { readProjectConfig } from "../../lib/config"
+import { detectFramework } from "../../lib/frameworks"
 import { ui, fail, cli } from "../../lib/ui"
 
 interface FunctionPayload {
@@ -122,6 +123,18 @@ export function functionsHttpCommand(): Command {
         ui.success(`HTTP enabled for "${fn.slug}".`)
         if (fn.publicUrl) ui.info(`Public URL: ${fn.publicUrl}`)
         else ui.hint(`The URL appears after your first ${cli("deploy")}.`)
+
+        // An eve project compiles to an agent and its tools; it declares no
+        // HTTP handler, so the URL above answers 404 to everything. Printing a
+        // working-looking URL and letting the developer discover that by
+        // curling it is the kind of silence this adapter exists to avoid.
+        const detection = await detectFramework(process.cwd())
+        if (detection.framework === "eve") {
+          ui.warn(
+            "This is an eve project, which declares no HTTP handler, so that URL returns 404 for every request."
+          )
+          ui.hint(`Reach its tools with ${cli("invoke --tool <name>")} instead.`)
+        }
       })
 
   cmd.addCommand(toggle("enable"))

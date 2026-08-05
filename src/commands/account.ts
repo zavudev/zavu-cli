@@ -8,6 +8,7 @@ import { Command } from "commander"
 import { buildApi } from "../lib/api"
 import {
   readCredentials,
+  resolveCredentials,
   clearCredentials,
   credentialsPath,
 } from "../lib/config"
@@ -18,7 +19,11 @@ export function whoamiCommand(): Command {
     .description("Show which project + team the CLI is authenticated against.")
     .option("--json", "Print as JSON")
     .action(async (opts: { json?: boolean }) => {
-      const creds = await readCredentials()
+      // Resolved, not read from disk: the API call below goes through the same
+      // resolution, so reading the file here reported the stored key and URL
+      // while the answer came from whatever ZAVUDEV_API_KEY pointed at. Two
+      // identities in one output, and the one printed was the wrong one.
+      const creds = await resolveCredentials()
       if (!creds?.apiKey) {
         fail("Not logged in. Run `npx zavudev login` first.")
       }

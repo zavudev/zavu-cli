@@ -546,6 +546,12 @@ export function agentsCommand(): Command {
           res.items.map((e) => ({
             id: e.id,
             status: e.status,
+            // The column that answers "it said it would look something up and
+            // nothing reached my server". A success with 0 tools is exactly
+            // that, and without this it reads the same as one that fetched
+            // real data. Older executions have no count at all, which is not
+            // the same as zero, so they print "—".
+            tools: e.toolCalls == null ? "—" : String(e.toolCalls),
             tokens: `${e.inputTokens ?? 0}+${e.outputTokens ?? 0}`,
             cost: e.cost != null ? `$${e.cost.toFixed(4)}` : "—",
             ms: String(e.latencyMs ?? "—"),
