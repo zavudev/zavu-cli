@@ -1,6 +1,6 @@
 {
   "name": "zavudev",
-  "version": "0.10.1",
+  "version": "0.11.0",
   "description": "Official CLI for Zavu — deploy Functions, send messages, manage senders & contacts.",
   "type": "module",
   "bin": {
