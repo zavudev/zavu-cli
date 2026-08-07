@@ -20,6 +20,7 @@ function buildSenderBody(opts: Record<string, any>): Record<string, unknown> {
   }
   if (opts.setDefault) body.setAsDefault = true
   if (opts.webhookUrl) body.webhookUrl = opts.webhookUrl
+  if (opts.signatureVersion) body.webhookSignatureVersion = opts.signatureVersion
   if (opts.webhookEvents) {
     body.webhookEvents = String(opts.webhookEvents)
       .split(",")
@@ -36,8 +37,18 @@ function buildSenderUpdateBody(opts: Record<string, any>): Record<string, unknow
   if (opts.enableVoice) body.enableVoice = true
   if (opts.disableVoice) body.enableVoice = false
   if (opts.setDefault) body.setAsDefault = true
+  if (opts.webhookUrl) body.webhookUrl = opts.webhookUrl
+  if (opts.webhookEvents) {
+    body.webhookEvents = String(opts.webhookEvents)
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean)
+  }
+  if (opts.signatureVersion) body.webhookSignatureVersion = opts.signatureVersion
   if (Object.keys(body).length === 0) {
-    fail("Nothing to update. Pass --name, --enable-voice, --disable-voice, --set-default, or --data/--file.")
+    fail(
+      "Nothing to update. Pass --name, --enable-voice, --disable-voice, --set-default, --webhook-url, --webhook-events, --signature-version, or --data/--file."
+    )
   }
   return body
 }
@@ -60,6 +71,9 @@ export const sendersCommand = (): Command =>
       email: s.emailAddress ?? "—",
       default: s.isDefault ? "yes" : "",
       whatsapp: s.whatsapp ? "yes" : "",
+      // Blank when there is no webhook at all, so the column reads as "who has
+      // one and what are they on" rather than implying every sender is on v1.
+      signature: s.webhook ? (s.webhook.signatureVersion ?? "v1") : "",
     }),
     customize: (cmd, apiFactory) => {
       cmd
@@ -73,6 +87,10 @@ export const sendersCommand = (): Command =>
         .option("--set-default", "Make this the project's default sender")
         .option("--webhook-url <url>", "HTTPS URL for webhook events")
         .option("--webhook-events <list>", "Comma-separated events to subscribe to")
+        .option(
+          "--signature-version <v>",
+          'Signature scheme: v1, v1+v2 or v2. Defaults to v2. Pass "v1+v2" if this endpoint already serves an older sender.'
+        )
         .option("--data <json>", "Full JSON body (advanced)")
         .option("--file <path>", "Path to a JSON body file (advanced)")
         .action(async (opts) => {
@@ -90,11 +108,17 @@ export const sendersCommand = (): Command =>
 
       cmd
         .command("update <senderId>")
-        .description("Update a sender. Use --name / --enable-voice / --disable-voice, or --data/--file.")
+        .description("Update a sender: name, voice, webhook, or signature scheme.")
         .option("--name <name>", "Rename the sender")
         .option("--enable-voice", "Let this sender place and answer calls")
         .option("--disable-voice", "Stop this sender taking calls")
         .option("--set-default", "Make this the project's default sender")
+        .option("--webhook-url <url>", "HTTPS URL for webhook events")
+        .option("--webhook-events <list>", "Comma-separated events to subscribe to")
+        .option(
+          "--signature-version <v>",
+          "Move the webhook between signature schemes: v1, v1+v2 or v2. v1 -> v2 directly is rejected; go through v1+v2."
+        )
         .option("--data <json>", "Inline JSON body")
         .option("--file <path>", "Path to a JSON file")
         .action(async (id, opts) => {
@@ -108,6 +132,56 @@ export const sendersCommand = (): Command =>
             const res = await api.patch(`/v1/senders/${id}`, body)
             ui.success("Updated.")
             process.stdout.write(JSON.stringify(res, null, 2) + "\n")
+          } catch (err) {
+            fail(err instanceof Error ? err.message : String(err))
+          }
+        })
+
+      // A dedicated read, because "which signature am I on?" is the question
+      // you ask before and after every step of a migration, and answering it
+      // by eyeballing a full sender JSON is how people misread it.
+      cmd
+        .command("signature <senderId>")
+        .description("Show which webhook signature scheme this sender is sent, and what comes next.")
+        .action(async (id) => {
+          const api = await apiFactory()
+          try {
+            const res = await api.get<{
+              webhook?: { url: string; signatureVersion?: string }
+            }>(`/v1/senders/${id}`)
+
+            if (!res.webhook) {
+              ui.info("This sender has no webhook configured, so nothing is signed.")
+              return
+            }
+
+            const current = res.webhook.signatureVersion ?? "v1"
+            process.stdout.write(`endpoint   ${res.webhook.url}\n`)
+            process.stdout.write(`signature  ${current}\n`)
+
+            const next =
+              current === "v1" ? "v1+v2" : current === "v1+v2" ? "v2" : null
+
+            if (!next) {
+              process.stdout.write("\nOn the current scheme. Nothing to do.\n")
+              return
+            }
+
+            process.stdout.write(
+              `\nNext step:\n  npx zavudev senders update ${id} --signature-version ${next}\n`
+            )
+            if (next === "v1+v2") {
+              process.stdout.write(
+                "\nThat sends both signatures at once, so your current receiver is unaffected.\n"
+              )
+            } else {
+              process.stdout.write(
+                "\nConfirm your receiver is validating v2 on real deliveries first.\n"
+              )
+            }
+            process.stdout.write(
+              "https://docs.zavu.dev/guides/receiving-messages/signature-migration\n"
+            )
           } catch (err) {
             fail(err instanceof Error ? err.message : String(err))
           }

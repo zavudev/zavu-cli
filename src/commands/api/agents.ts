@@ -823,6 +823,23 @@ function attachToolsSubResource(parent: Command) {
     })
 
   sub
+    .command("rotate-secret <toolId>")
+    .description("Generate a new signing secret for this tool's webhook. The old one stops working.")
+    .requiredOption("--sender <senderId>", "Sender ID")
+    .action(async (toolId, opts) => {
+      const api = await buildApi()
+      try {
+        const res = await api.post<{ secret: string }>(
+          `${agentBase(opts.sender)}/tools/${toolId}/webhook/secret`
+        )
+        ui.success("New secret generated. Save it, it is not shown again.")
+        process.stdout.write(`${res.secret}\n`)
+      } catch (err) {
+        fail(err instanceof Error ? err.message : String(err))
+      }
+    })
+
+  sub
     .command("test-runs <toolId>")
     .description("Recent runs of this tool from `tools test`. Live agent calls are not listed.")
     .requiredOption("--sender <senderId>", "Sender ID")
