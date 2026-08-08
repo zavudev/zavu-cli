@@ -18,6 +18,13 @@ export interface ReconcileSummary {
   toolsUpdated: string[]
   toolsUnchanged?: string[]
   toolsDeleted: string[]
+  /** Present since defineAgent learned to declare a knowledge base. */
+  knowledgeCreated?: string[]
+  knowledgeUpdated?: string[]
+  flowsCreated?: string[]
+  flowsUpdated?: string[]
+  flowsDeleted?: string[]
+  knowledgeDeleted?: string[]
   warnings: string[]
 }
 
@@ -54,6 +61,31 @@ export function printReconcileSummary(
       for (const n of summary.toolsUpdated) ui.hint(`  ~ ${n}`)
       for (const n of summary.toolsUnchanged ?? []) ui.hint(`  = ${n} (unchanged)`)
       for (const n of summary.toolsDeleted) ui.hint(`  - ${n}`)
+    }
+    // Knowledge bases only. The documents inside them are synced after this
+    // returns, so no per-document line can appear here: the previous version
+    // printed one for re-embedded documents against a list the server never
+    // fills, which read as "nothing was re-embedded" on every deploy.
+    const knowledgeTouched =
+      (summary.knowledgeCreated?.length ?? 0) + (summary.knowledgeDeleted?.length ?? 0)
+    if (knowledgeTouched > 0) {
+      ui.info("Knowledge bases:")
+      for (const n of summary.knowledgeCreated ?? []) ui.hint(`  + ${n}`)
+      for (const n of summary.knowledgeDeleted ?? []) ui.hint(`  - ${n}`)
+      ui.hint("  documents sync in the background; check with `agents knowledge-bases documents list`")
+    }
+    const flowsTouched =
+      (summary.flowsCreated?.length ?? 0) +
+      (summary.flowsUpdated?.length ?? 0) +
+      (summary.flowsDeleted?.length ?? 0)
+    if (flowsTouched > 0) {
+      ui.info("Flows synced:")
+      for (const n of summary.flowsCreated ?? []) ui.hint(`  + ${n} (disabled)`)
+      for (const n of summary.flowsUpdated ?? []) ui.hint(`  ~ ${n}`)
+      for (const n of summary.flowsDeleted ?? []) ui.hint(`  - ${n}`)
+      if ((summary.flowsCreated?.length ?? 0) > 0) {
+        ui.hint("  a new flow starts disabled; enable it with `agents flows update <id> --enabled`")
+      }
     }
     for (const w of summary.warnings) ui.warn(w)
   }

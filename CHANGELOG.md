@@ -7,7 +7,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-08-08
+
 ### Added
+
+- `zavudev senders signature <senderId>` prints which signature scheme a
+  sender's webhook is sent: `v1`, `v2`, or both during a migration. A receiver
+  that verifies the wrong one rejects every delivery, and nothing in the
+  request says which you are being sent, so this is the way to check.
+- `zavudev senders update --signature-version <v1|v1+v2|v2>` moves a sender
+  between schemes. Going straight from `v1` to `v2` is refused: set `v1+v2`
+  first, confirm your receiver accepts the new one, then switch. `senders list`
+  shows a `signature` column.
+- `zavudev senders update --webhook-url` and `--webhook-events`. Changing
+  either previously meant hand-writing the JSON body with `--data`.
+- `zavudev agents tools rotate-secret <toolId>` mints a new signing secret for
+  a tool's webhook. The previous one stops working immediately, so update your
+  endpoint first.
+- `zavudev deploy` prints what it synced for knowledge bases and flows, not
+  only agents and tools. A flow arrives disabled and the output says how to
+  turn it on.
+- `zavudev deploy` warns before uploading when the file looks like it imports
+  another file next to it, since a function deploys as a single file. It is a
+  warning, not a refusal: the check reads source text without parsing it, and
+  stopping a deploy that would have worked costs more than a stray line.
+
+### Changed
+
+- `zavudev deploy` no longer prints a per-document line for a knowledge base.
+  Documents sync after the deploy returns, so that line reported nothing had
+  changed whether or not anything had. The knowledge bases themselves are
+  still listed.
+- `zavudev fn init` scaffolds an agent with a tool by default (`defineAgent` +
+  `defineTool`), the shape the guides and skills teach. The previous default is
+  still there as `--template blank`; it uses `defineFunction` and handles raw
+  events, which is a different model.
 
 - `zavudev agents tools test <toolId>` runs one tool now and prints what it
   answered: the status, the body and how long it took. Running a tool was
@@ -92,13 +126,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `zavudev fn http enable` on an eve project announced a public URL without
   saying that such a project declares no HTTP handler, so the URL answered 404
   to everything. It now says so and points at `invoke --tool`.
-
-### Changed
-
-- `zavudev fn init` scaffolds an agent with a tool by default (`defineAgent` +
-  `defineTool`), the shape the guides and skills teach. The previous default is
-  still there as `--template blank`; it uses `defineFunction` and handles raw
-  events, which is a different model.
 
 ## [0.10.1] - 2026-08-02
 
