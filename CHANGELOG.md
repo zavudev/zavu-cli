@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.13.0] - 2026-08-10
+
+### Added
+
+- A function can be split across as many files as it needs. `zavudev deploy`
+  starts at your entrypoint and uploads every file it reaches through relative
+  imports, and the imports between them are resolved when the function is
+  built.
+
+  Files nothing imports are not uploaded, so tests and scratch work stay on
+  your machine. A project can hold up to 200 files totalling 900,000 bytes.
+  npm packages are unchanged: declare them under `dependencies` in
+  `package.json`.
+
+  Paths that reach above the project directory, `node_modules/`, and
+  `package.json` are refused. If you import a file from outside the project,
+  move it in or publish it as an npm package.
+
+### Changed
+
+- `zavudev deploy` no longer warns that a relative import cannot be deployed.
+  It follows the import and uploads the file. An import it cannot resolve is
+  still reported, and the deploy continues.
+- `--source <file>` names the project's entrypoint. It used to name the only
+  file that would be uploaded.
+- A single-file project deploys exactly as before.
+
 ## [0.12.0] - 2026-08-08
 
 ### Added
