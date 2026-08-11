@@ -43,7 +43,34 @@ describe("scaffold", () => {
     // Handlers read secrets from process.env and call fetch; without node types
     // the very first thing anyone writes fails to compile.
     expect(tsconfig.compilerOptions.types).toContain("node")
-    expect(tsconfig.include).toContain("*.ts")
+    // Subdirectories, not just the root. A function deploys every file its
+    // entrypoint imports, so `lib/orders.ts` is part of the project; a
+    // root-only glob left it outside the program, where the editor treated it
+    // as a loose file and `tsc --noEmit` never opened it.
+    expect(tsconfig.include).toContain("**/*.ts")
+    expect(tsconfig.exclude).toContain("node_modules")
+  })
+
+  it("pins the runtime package to the minor that is actually published", async () => {
+    // `^0.1.0` cannot resolve to 0.2.0: under semver a caret on a 0.x version
+    // is locked to that minor. The scaffold therefore installed declarations
+    // that predated defineFlow, knowledge bases and multi-sender agents, and
+    // code copied straight out of the docs failed to typecheck against a
+    // runtime that supports it. Compare against the package in this repo,
+    // which is what gets published.
+    const pkg = JSON.parse(
+      await readFile(
+        new URL("../../../../zavu-functions/package.json", import.meta.url),
+        "utf8"
+      )
+    )
+    const range = RUNTIME_DEV_DEPENDENCY["@zavudev/functions"]
+    const [rMajor, rMinor] = range.replace(/^[^\d]*/, "").split(".").map(Number)
+    const [pMajor, pMinor] = pkg.version.split(".").map(Number)
+
+    expect(rMajor).toBe(pMajor)
+    // Below 1.0 a caret does not cross minors, so the minor has to match too.
+    if (pMajor === 0) expect(rMinor).toBe(pMinor)
   })
 
   it("no longer maps the module through tsconfig paths", async () => {

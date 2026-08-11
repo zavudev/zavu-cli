@@ -26,7 +26,11 @@ import { join } from "node:path"
  * types and local execution from `npm install`.
  */
 export const RUNTIME_DEV_DEPENDENCY: Record<string, string> = {
-  "@zavudev/functions": "^0.1.0",
+  // Track the published minor, not an older one. `^0.1.0` cannot resolve to
+  // 0.2.0 under semver, so a fresh scaffold installed types that predated
+  // defineFlow, knowledge bases and multi-sender agents: code straight out of
+  // the docs failed to typecheck against a runtime that supports it.
+  "@zavudev/functions": "^0.2.0",
   // The blank template imports the SDK on its first line, but it was never
   // added here, so a fresh scaffold failed with "Cannot find module
   // '@zavudev/sdk'" before the developer had changed anything. The range is
@@ -58,7 +62,12 @@ const TSCONFIG = {
     skipLibCheck: true,
     noEmit: true,
   },
-  include: ["*.ts"],
+  // Subdirectories included, not just the root. A function deploys every file
+  // its entrypoint imports, so `lib/orders.ts` is part of the project; with a
+  // root-only glob the editor treated it as a loose file outside the project
+  // and `tsc --noEmit` never looked at it.
+  include: ["**/*.ts"],
+  exclude: ["node_modules"],
 }
 
 /** Write the tsconfig a scaffolded project needs. Idempotent. */

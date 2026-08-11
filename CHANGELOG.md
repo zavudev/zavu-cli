@@ -34,6 +34,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   file that would be uploaded.
 - A single-file project deploys exactly as before.
 
+### Fixed
+
+- `zavudev functions init` scaffolded a project pinned to an older release of
+  `@zavudev/functions`, so flows, knowledge bases and multi-sender agents had
+  no types and code copied from the docs did not typecheck. New projects get
+  the current release. In a project you already have, run
+  `npm install -D @zavudev/functions@^0.2.0`.
+- The scaffolded `tsconfig.json` covered only the project root, so a file in a
+  subdirectory was never typechecked. It covers subdirectories now.
+
 ## [0.12.0] - 2026-08-08
 
 ### Added
