@@ -85,7 +85,11 @@ export async function registerFunction(
   args: {
     name: string
     slug: string
-    sourceCode: string
+    /** The project tree, keyed by path relative to the project root. */
+    files?: Record<string, string>
+    entrypoint?: string
+    /** Single-file form, for callers that produce one module (the eve compiler). */
+    sourceCode?: string
     dependencies: Record<string, string>
     httpEnabled?: boolean
   }
@@ -108,7 +112,9 @@ export async function registerFunction(
       body: JSON.stringify({
         name: args.name,
         slug: candidateSlug,
-        sourceCode: args.sourceCode,
+        ...(args.files ? { files: args.files } : {}),
+        ...(args.entrypoint ? { entrypoint: args.entrypoint } : {}),
+        ...(args.sourceCode !== undefined ? { sourceCode: args.sourceCode } : {}),
         dependencies: args.dependencies,
         // Only sent when asked for. `POST /v1/functions` already accepts it, so
         // exposing a function over HTTP no longer requires a trip to the

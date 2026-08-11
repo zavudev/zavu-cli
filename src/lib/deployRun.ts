@@ -101,7 +101,11 @@ export interface DeployArgs {
   functionId: string
   /** For the progress line, e.g. `My Bot (my-bot)`. */
   label: string
-  sourceCode: string
+  /** The project tree, keyed by path relative to the project root. */
+  files?: Record<string, string>
+  entrypoint?: string
+  /** Single-file form, for callers that produce one module (the eve compiler). */
+  sourceCode?: string
   dependencies: Record<string, string>
   architecture?: "arm64" | "x86_64"
   updateRuntime?: boolean
@@ -124,7 +128,9 @@ export async function deployAndWait(args: DeployArgs): Promise<void> {
       Authorization: `Bearer ${args.client.apiKey}`,
     },
     body: JSON.stringify({
-      sourceCode: args.sourceCode,
+      ...(args.files ? { files: args.files } : {}),
+      ...(args.entrypoint ? { entrypoint: args.entrypoint } : {}),
+      ...(args.sourceCode !== undefined ? { sourceCode: args.sourceCode } : {}),
       dependencies: args.dependencies,
       ...(args.architecture ? { architecture: args.architecture } : {}),
       ...(args.updateRuntime ? { updateRuntime: true } : {}),

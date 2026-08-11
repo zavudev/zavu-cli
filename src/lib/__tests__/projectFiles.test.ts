@@ -1,16 +1,21 @@
-// A Zavu function deploys as ONE file. The build worker writes the source
-// beside its wrapper and runs esbuild on that pair, so a relative import
-// resolves to a file that is not on the build box.
+// The import scanner that decides which files a deploy uploads.
 //
-// Before this check the failure was esbuild's `Could not resolve "./helpers"`,
-// arriving after the upload, saying nothing about the rule it broke. Nothing in
-// the public docs mentioned the constraint either, so the only way to learn it
-// was to hit it.
+// It was written for the opposite job: a Zavu function used to deploy as ONE
+// file, and this found the relative imports that could not possibly resolve so
+// the CLI could warn before the upload. Functions are trees now, so the same
+// parse drives the walk instead — every specifier it finds is a file to send.
+//
+// The cases below are the ones that broke it, and they still matter. What DID
+// change is the cost of being wrong. Flagging an import that was not one used
+// to block a working deploy; now it uploads a file nothing imports, which the
+// bundler drops. Missing one used to cost a stray warning; now it leaves a file
+// behind and the build cannot resolve it. So the scanner errs generous, and the
+// type-only cases below assert inclusion rather than exclusion.
 
 import { describe, it, expect } from "vitest"
-import { findRelativeImports } from "../../commands/functions/deploy"
+import { findRelativeImports } from "../projectFiles"
 
-describe("findRelativeImports", () => {
+describe("findRelativeImports (project walk)", () => {
   it("finds a bare relative import", () => {
     expect(findRelativeImports(`import { helper } from "./helpers"`)).toEqual(["./helpers"])
   })
@@ -91,33 +96,31 @@ describe("findRelativeImports", () => {
     ).toEqual([])
   })
 
-  it("does not flag import type, which the bundler erases", () => {
-    // esbuild's ts loader drops `import type` without resolving it, so the file
-    // is never fetched and a single-file deploy is fine. Flagging it blocks a
-    // deploy that already worked, and tells the user to inline a file whose
-    // contents are never bundled.
+  it("follows import type as well", () => {
+    // The bundler erases `import type` without reading the file, so uploading
+    // it changes nothing about the output. Skipping it would: a project whose
+    // types live in ./types would deploy fine until someone imported a value
+    // from the same file, and then fail on a line nobody touched.
     expect(
       findRelativeImports(`
         import type { Ctx } from "./types"
         import { defineAgent } from "@zavudev/functions"
       `),
-    ).toEqual([])
+    ).toEqual(["./types"])
   })
 
-  it("still flags a value import that also carries a type", () => {
-    // `import { type X, y }` keeps a runtime binding, so the file IS fetched.
+  it("follows a value import that also carries a type", () => {
     expect(findRelativeImports(`import { type Ctx, helper } from "./helpers"`)).toEqual([
       "./helpers",
     ])
   })
 
-  it("skips the other forms the bundler erases", () => {
-    // All three deploy fine today and used to be blocked.
+  it("follows the other type-only forms", () => {
     expect(
       findRelativeImports(`import type {\n  A,\n  B,\n} from "./types"`),
-    ).toEqual([])
-    expect(findRelativeImports(`import { type A, type B } from './t'`)).toEqual([])
-    expect(findRelativeImports(`export type { X } from './t'`)).toEqual([])
+    ).toEqual(["./types"])
+    expect(findRelativeImports(`import { type A, type B } from './t'`)).toEqual(["./t"])
+    expect(findRelativeImports(`export type { X } from './t'`)).toEqual(["./t"])
   })
 
   it("is not desynced by a regex literal containing a quote", () => {

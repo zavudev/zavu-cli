@@ -1,10 +1,10 @@
 // `npx zavudev functions deploy` — figure out what kind of project the current
-// directory holds, produce a single sourceCode, and push it to Zavu's deploy
-// pipeline.
+// directory holds, collect its source, and push it to Zavu's deploy pipeline.
 //
 // Two project formats deploy today:
-//   - Zavu native: a root index.ts. Sent as-is; the server-side Build Worker
-//     (esbuild + npm install) does all bundling, exactly as before.
+//   - Zavu native: a root index.ts, plus every file it imports. The tree is
+//     uploaded as-is and the server-side Build Worker (esbuild + npm install)
+//     resolves the imports between the files and bundles them.
 //   - eve layout: agent/instructions.md + agent/tools/*. Compiled client-side
 //     into one module (see lib/frameworks.ts) and shipped through the same
 //     endpoint — the server cannot tell the difference.
@@ -18,194 +18,7 @@ import { registerFunction, deriveFunctionIdentity } from "../../lib/registerFunc
 import { ui, fail } from "../../lib/ui"
 import { deployAndWait } from "../../lib/deployRun"
 import { detectFramework, compileEveProject, printEveReport } from "../../lib/frameworks"
-
-/**
- * Relative imports in a single-file deploy, which cannot resolve.
- *
- * Deliberately syntactic rather than a real parse: it runs on source we are
- * about to upload anyway. But a false positive here is not cheap, because there
- * is no override flag: it blocks a deploy that would have worked, over source
- * the user cannot see the problem in. So the scan tracks whether it is inside a
- * string before it believes an import, and it skips `import type`, which the
- * bundler erases without ever resolving.
- *
- * The specifier itself is a string, so strings cannot simply be deleted. They
- * are replaced by a marker that remembers which string it was; a marker that
- * survives in import position is resolved back to its text.
- */
-function maskStrings(source: string): { masked: string; strings: string[] } {
-  const strings: string[] = []
-  let masked = ""
-  let i = 0
-
-  // Whether a `/` at this point starts a regex or divides. A regex can only
-  // begin where a value cannot follow, so the last meaningful character decides
-  // it. Without this the quote inside `/["']/` opens a string that runs to the
-  // next quote, and everything after shifts by one: a path named in a prompt
-  // lands in import position and blocks a deploy that works. `/["']/` and
-  // `/['"]/` gave opposite answers, decided by the order of two characters.
-  let regexAllowed = true
-  // Template literals nest through `${...}`, and the inner backtick used to be
-  // read as the outer one closing.
-  const templates: number[] = []
-
-  const lastMeaningful = () => {
-    for (let j = masked.length - 1; j >= 0; j--) {
-      if (!/\s/.test(masked[j])) return masked[j]
-    }
-    return ""
-  }
-
-  while (i < source.length) {
-    const c = source[i]
-
-    if (c === "/" && source[i + 1] === "/") {
-      while (i < source.length && source[i] !== "\n") i++
-      continue
-    }
-    if (c === "/" && source[i + 1] === "*") {
-      i += 2
-      while (i < source.length && !(source[i] === "*" && source[i + 1] === "/")) i++
-      i += 2
-      continue
-    }
-
-    // A regex literal. Consumed whole so its contents cannot be mistaken for
-    // anything: not a string, not a comment, not an import.
-    if (c === "/" && regexAllowed) {
-      let j = i + 1
-      let inClass = false
-      let closed = false
-      while (j < source.length) {
-        const d = source[j]
-        if (d === "\\") { j += 2; continue }
-        if (d === "\n") break
-        if (d === "[") inClass = true
-        else if (d === "]") inClass = false
-        else if (d === "/" && !inClass) { closed = true; break }
-        j++
-      }
-      if (closed) {
-        masked += " "
-        i = j + 1
-        regexAllowed = false
-        continue
-      }
-      // Unterminated: treat it as division and carry on.
-    }
-
-    // A template literal is consumed whole, interpolations and all, and
-    // replaced by a space. Reading `${...}` as code and resuming the text after
-    // it is what a parser does, and getting the resume point wrong turns the
-    // rest of the template into code: `\`pre ${x} import y from "./z"\`` then
-    // reports ./z. An import written inside an interpolation is missed, which
-    // costs a clear esbuild error a minute later; the other way costs a blocked
-    // deploy. Nesting is tracked so an inner template does not end the outer.
-    if (c === "`") {
-      i++
-      let depth = 0
-      while (i < source.length) {
-        const d = source[i]
-        if (d === "\\") { i += 2; continue }
-        if (d === "`" && depth === 0) { i++; break }
-        if (d === "$" && source[i + 1] === "{") { depth++; i += 2; continue }
-        if (d === "}" && depth > 0) { depth--; i++; continue }
-        i++
-      }
-      masked += " "
-      regexAllowed = false
-      continue
-    }
-
-    if (c === '"' || c === "'") {
-      const quote = c
-      i++
-      let text = ""
-      while (i < source.length && source[i] !== quote) {
-        if (source[i] === "\\") {
-          text += source[i] + (source[i + 1] ?? "")
-          i += 2
-          continue
-        }
-        text += source[i]
-        i++
-      }
-      i++ // closing quote
-      strings.push(text)
-      masked += `${quote}\u0000${strings.length - 1}\u0000${quote}`
-      regexAllowed = false
-      continue
-    }
-
-    masked += c
-    i++
-    if (!/\s/.test(c)) {
-      // A value can follow these, so a `/` after them divides. Anywhere else
-      // (an operator, a comma, an opening bracket) a regex may start.
-      regexAllowed = !/[\w$)\]]/.test(lastMeaningful())
-    }
-  }
-
-  return { masked, strings }
-}
-
-const MARKER = /["'`]\u0000(\d+)\u0000["'`]/.source
-
-/**
- * Import forms the bundler erases without ever resolving the file, so a
- * single-file deploy is fine and flagging them stops a deploy that works:
- *
- *   import type { A } from "./t"          including across lines
- *   import { type A, type B } from "./t"  every specifier type-only
- *   export type { A } from "./t"
- *
- * `import { type A, b }` keeps a runtime binding, so it is NOT erased and must
- * still be reported.
- */
-function stripErasedImports(masked: string): string {
-  const typeKeyword = new RegExp(
-    String.raw`\b(?:import|export)\s+type\b[\s\S]*?from\s+${MARKER}`,
-    "g"
-  )
-  let out = masked.replace(typeKeyword, " ")
-
-  const braced = new RegExp(
-    String.raw`\b(?:import|export)\s*\{([^}]*)\}\s*from\s+${MARKER}`,
-    "g"
-  )
-  out = out.replace(braced, (whole, specifiers: string) => {
-    const parts = specifiers
-      .split(",")
-      .map((p) => p.trim())
-      .filter(Boolean)
-    const allTypes = parts.length > 0 && parts.every((p) => /^type\s/.test(p))
-    return allTypes ? " " : whole
-  })
-
-  return out
-}
-
-export function findRelativeImports(source: string): string[] {
-  const { masked, strings } = maskStrings(source)
-  const scannable = stripErasedImports(masked)
-
-  const patterns = [
-    new RegExp(String.raw`\bfrom\s+${MARKER}`, "g"),
-    new RegExp(String.raw`\brequire\s*\(\s*${MARKER}\s*\)`, "g"),
-    new RegExp(String.raw`\bimport\s*\(\s*${MARKER}\s*\)`, "g"),
-    new RegExp(String.raw`\bimport\s+${MARKER}`, "g"),
-  ]
-
-  const found = new Set<string>()
-  for (const re of patterns) {
-    let m: RegExpExecArray | null
-    while ((m = re.exec(scannable))) {
-      const spec = strings[Number(m[1])]
-      if (spec?.startsWith(".")) found.add(spec)
-    }
-  }
-  return [...found]
-}
+import { collectProjectFiles } from "../../lib/projectFiles"
 
 export function functionsDeployCommand(): Command {
   return new Command("deploy")
@@ -270,7 +83,12 @@ export function functionsDeployCommand(): Command {
         const sourceExplicit = opts.source !== "index.ts"
         const detection = await detectFramework(cwd)
 
-        let sourceCode: string
+        // What gets uploaded. The eve path compiles to a single module and
+        // sends `sourceCode`; the native path sends the tree it walked. The API
+        // accepts either.
+        let files: Record<string, string> | undefined
+        let entrypoint: string | undefined
+        let sourceCode: string | undefined
         let dependencies: Record<string, string>
 
         if (!sourceExplicit && detection.framework === "eve") {
@@ -285,45 +103,54 @@ export function functionsDeployCommand(): Command {
           sourceCode = compiled!.sourceCode
           dependencies = compiled!.dependencies
         } else {
+          // Walk the project from its entrypoint and upload everything it
+          // reaches. Files nothing imports (tests, scratch work) stay on your
+          // machine.
+          let collected
           try {
-            sourceCode = await readFile(join(cwd, opts.source), "utf8")
-          } catch {
-            if (detection.framework === "unknown") {
+            collected = await collectProjectFiles(cwd, opts.source)
+          } catch (err) {
+            const message = err instanceof Error ? err.message : String(err)
+            if (message.startsWith("Could not read") && detection.framework === "unknown") {
               fail(
                 `Could not read ${opts.source}, and this directory is neither a Zavu function (index.ts) nor an eve project (agent/instructions.md). Pass --source <file> if your entrypoint is named differently.`
               )
             }
-            fail(`Could not read ${opts.source}. Pass --source <file> if your entrypoint is named differently.`)
+            if (message.startsWith("Could not read")) {
+              fail(`Could not read ${opts.source}. Pass --source <file> if your entrypoint is named differently.`)
+            }
+            fail(message)
           }
+          files = collected!.files
+          entrypoint = collected!.entrypoint
           dependencies = pkgDependencies
 
-          // The native path uploads this one file and nothing else: the build
-          // worker writes it beside its wrapper and runs esbuild on that pair.
-          // A relative import therefore resolves to a file that is not on the
-          // build box, and the deploy dies with esbuild's `Could not resolve`,
-          // which says nothing about the actual rule. Catch it here, before
-          // the upload, and say what to do instead.
-          //
-          // This warns and continues rather than stopping the deploy. Deciding
-          // "is this an import" from source text without parsing it is a
-          // heuristic, and the two ways it can be wrong cost wildly different
-          // amounts: a missed import reaches esbuild, which fails clearly a
-          // moment later, while a false alarm would stop a deploy that works
-          // with no way to override it. Adversarial testing found five inputs
-          // that tripped it, including a prompt whose text was misread because
-          // a regex literal earlier in the file contained a quote. Those are
-          // fixed, and the next one should cost a stray warning, not someone's
-          // afternoon.
-          const relativeImports = findRelativeImports(sourceCode)
-          if (relativeImports.length > 0) {
-            const list = relativeImports.map((i) => `  ${i}`).join("\n")
-            ui.warn(
-              `${opts.source} looks like it imports files next to it, and a Zavu function deploys as a single file:\n\n${list}\n\n` +
-                `If that is right, the build will fail to resolve them. Inline them, or deploy the whole repository instead:\n` +
-                `  npx zavudev fn git link <owner>/<repo> --branch main\n\n` +
-                `npm dependencies are fine: declare them in package.json and they are installed and bundled.`
-            )
+          const count = Object.keys(files).length
+          if (count > 1) {
+            ui.step(`Uploading ${count} files from ${entrypoint}.`)
           }
+
+          // Also send the single-file form when the project IS one file.
+          //
+          // This CLI is published to npm separately from the API that learned to
+          // read `files`, and nothing stops someone upgrading the CLI while
+          // pointed at an older deployment. That server would ignore `files`,
+          // find no source in the request, and quietly redeploy whatever draft
+          // it already had — a green deploy of the wrong code, which is the
+          // worst way to fail. Sending both makes the common case survive it.
+          // A server that understands `files` prefers it and ignores this.
+          //
+          // A genuinely multi-file project cannot be expressed to that older
+          // server at all, so there is nothing to add here; it fails loudly
+          // instead, which is the right outcome.
+          if (count === 1) {
+            sourceCode = files[entrypoint]
+          }
+          // Not fatal: an unresolvable import may just be the scanner reading
+          // something that is not an import at all. The build says so properly
+          // if it was real.
+          for (const warning of collected!.warnings) ui.warn(warning)
+
         }
 
         // First deploy of a project that exists on disk but not yet in Zavu.
@@ -354,7 +181,9 @@ export function functionsDeployCommand(): Command {
           const registered = await registerFunction(client, {
             name,
             slug: requestedSlug,
-            sourceCode: sourceCode!,
+            files,
+            entrypoint,
+            sourceCode,
             dependencies: dependencies!,
           })
           if (registered.slug !== requestedSlug) {
@@ -386,7 +215,9 @@ export function functionsDeployCommand(): Command {
           client,
           functionId: config!.functionId,
           label: `${config!.name} (${config!.slug})`,
-          sourceCode: sourceCode!,
+          files,
+          entrypoint,
+          sourceCode,
           dependencies: dependencies!,
           architecture,
           updateRuntime: opts.updateRuntime,
