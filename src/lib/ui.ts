@@ -138,6 +138,10 @@ export const ui = {
   info: (msg: string) => process.stdout.write(`${kleur.cyan("ℹ")} ${msg}\n`),
   success: (msg: string) => process.stdout.write(`${kleur.green("✓")} ${msg}\n`),
   warn: (msg: string) => process.stdout.write(`${kleur.yellow("!")} ${msg}\n`),
+  // Something is wrong and the command carries on. `fail` exits; this reports
+  // a problem the caller still has to finish reporting around, and reads the
+  // same as `fail` so a scan of the output cannot rank it lower.
+  error: (msg: string) => process.stdout.write(`${kleur.red("✗")} ${msg}\n`),
   step: (msg: string) => process.stdout.write(`${kleur.gray("›")} ${msg}\n`),
   hint: (msg: string) => process.stdout.write(`  ${kleur.gray(msg)}\n`),
   brandIntro,

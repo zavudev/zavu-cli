@@ -26,6 +26,11 @@ export interface ReconcileSummary {
   flowsDeleted?: string[]
   knowledgeDeleted?: string[]
   warnings: string[]
+  /**
+   * Synced correctly and still broken — an agent no channel can reach, say.
+   * Optional because an older server does not send it.
+   */
+  errors?: string[]
 }
 
 export function printReconcileSummary(
@@ -88,6 +93,8 @@ export function printReconcileSummary(
       }
     }
     for (const w of summary.warnings) ui.warn(w)
+    // After the warnings, because it is the line that has to be acted on.
+    for (const e of summary.errors ?? []) ui.error(e)
   }
   if (warning) ui.warn(`manifest probe: ${warning}`)
 }
@@ -117,6 +124,49 @@ export interface DeployArgs {
  * declarations failed to sync (a "successful" deploy that must not read as
  * one to scripts).
  */
+/**
+ * Print the build output of the most recent failed deployment, if there is one.
+ *
+ * Used when the deploy REQUEST fails rather than the deployment: the row is
+ * written before the action throws, so the compiler's message is already
+ * stored — just not in the response. Two fetches because the list deliberately
+ * omits build logs (one log per row would be megabytes).
+ *
+ * Best effort throughout. This runs while reporting an error, and failing to
+ * decorate an error must never replace it with a different one.
+ */
+async function printLastBuildFailure(args: DeployArgs): Promise<void> {
+  try {
+    const headers = { Authorization: `Bearer ${args.client.apiKey}` }
+    const listRes = await fetch(
+      `${args.client.baseURL}/v1/functions/${args.functionId}/deployments?limit=1`,
+      { headers }
+    )
+    if (!listRes.ok) return
+    const list = (await listRes.json()) as {
+      deployments?: Array<{ id: string; status: string }>
+    }
+    const latest = list.deployments?.[0]
+    if (!latest || latest.status !== "failed") return
+
+    const detailRes = await fetch(
+      `${args.client.baseURL}/v1/functions/deployments/${latest.id}`,
+      { headers }
+    )
+    if (!detailRes.ok) return
+    const detail = (await detailRes.json()) as {
+      deployment?: { buildLogs?: string | null; errorMessage?: string | null }
+    }
+    const logs = detail.deployment?.buildLogs?.trim() || detail.deployment?.errorMessage?.trim()
+    if (!logs) return
+
+    ui.info("Build output:")
+    for (const line of logs.split("\n")) ui.hint(`  ${line}`)
+  } catch {
+    // Nothing to add. The server's own error still gets reported.
+  }
+}
+
 export async function deployAndWait(args: DeployArgs): Promise<void> {
   ui.step(`Deploying ${args.label}…`)
   const startedAt = Date.now()
@@ -137,7 +187,16 @@ export async function deployAndWait(args: DeployArgs): Promise<void> {
     }),
   })
   if (!res.ok) {
-    fail(await extractServerError(res, `Deploy request rejected (${res.status})`))
+    const serverError = await extractServerError(
+      res,
+      `Deploy request rejected (${res.status})`
+    )
+    // A build that breaks fails the request itself, and the message that comes
+    // back out of the action is the outer wrapper's: "Build Worker failed",
+    // with the compiler's actual complaint left behind. But the attempt was
+    // recorded before it threw, so the useful text is one fetch away.
+    await printLastBuildFailure(args)
+    fail(serverError)
   }
   const created = (await res.json()) as { deployment?: { id: string } }
   const deploymentId = created.deployment?.id
@@ -165,6 +224,7 @@ export async function deployAndWait(args: DeployArgs): Promise<void> {
         errorMessage?: string | null
         reconcileSummary?: ReconcileSummary | null
         reconcileWarning?: string | null
+        buildLogs?: string | null
       }
     }
     const d = detailJson.deployment
@@ -186,7 +246,11 @@ export async function deployAndWait(args: DeployArgs): Promise<void> {
       // A green ✓ between the error above and the warning below read as a
       // clean deploy that happened to print something. The tick is only
       // earned when everything in the source actually synced.
-      if (d.reconcileWarning) {
+      // A reconcile error means something in the source is live and broken —
+      // an agent no message can reach, say. It synced, so it is not the
+      // manifest-probe failure below, and it is emphatically not a green tick.
+      const reconcileErrors = d.reconcileSummary?.errors ?? []
+      if (d.reconcileWarning || reconcileErrors.length > 0) {
         ui.warn(`Deployed with errors in ${elapsed}.`)
       } else {
         await ui.scrambleSuccess(`Deployed in ${elapsed}`)
@@ -213,10 +277,30 @@ export async function deployAndWait(args: DeployArgs): Promise<void> {
           "The declarations in your source were NOT synced. The function is live, but its agents and tools are unchanged. Fix the error above and deploy again."
         )
         process.exitCode = 1
+      } else if (reconcileErrors.length > 0) {
+        // Everything synced, and something in it cannot work. A script that
+        // only reads the exit code must not be told this went fine — that is
+        // exactly how an unreachable agent stays unreachable for a week.
+        ui.warn(
+          "Your declarations synced, but the deploy above is not usable as-is. Fix what is listed and deploy again."
+        )
+        process.exitCode = 1
       }
       return
     }
     if (d.status === "failed") {
+      // Print what the build printed before giving up.
+      //
+      // The status message is often the outer wrapper's ("Build Worker
+      // failed: [invalid_request]"), which names nothing you can act on. The
+      // compiler's own output — the unresolved import, the syntax error, the
+      // package that would not install — is in the logs, and without it the
+      // only way forward is guessing.
+      const logs = d.buildLogs?.trim()
+      if (logs) {
+        ui.info("Build output:")
+        for (const line of logs.split("\n")) ui.hint(`  ${line}`)
+      }
       fail(d.errorMessage ?? "Deploy failed.")
     }
   }

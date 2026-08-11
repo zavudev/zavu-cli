@@ -34,8 +34,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   file that would be uploaded.
 - A single-file project deploys exactly as before.
 
+- `zavudev agents test --execute-tools` runs the tools the agent calls instead
+  of reporting the choice and stopping. Each call prints with whether the
+  handler answered, and a run where the agent called nothing says so. The
+  handlers run for real: whatever they do — charge, write, notify — happens.
+  Nothing is delivered to a customer.
+
 ### Fixed
 
+- A failed deploy prints the build output: the unresolved import, the syntax
+  error, the package that would not install. It previously reported only a
+  one-line status that rarely named anything you could act on.
+- A deploy no longer reports success when an agent ends up unable to receive
+  anything, which happens when it declares channels its sender does not have.
+  The agent and the mismatch are printed and the command exits non-zero. This
+  check existed and never ran.
 - `zavudev functions init` scaffolded a project pinned to an older release of
   `@zavudev/functions`, so flows, knowledge bases and multi-sender agents had
   no types and code copied from the docs did not typecheck. New projects get

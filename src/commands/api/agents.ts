@@ -269,6 +269,10 @@ export function agentsCommand(): Command {
       "Prior turns, alternating user/assistant, oldest first (repeatable)"
     )
     .option("--no-knowledge", "Skip knowledge-base retrieval")
+    .option(
+      "--execute-tools",
+      "Actually run the tools the agent calls. Their handlers do whatever they do for real: charge, write, notify. Without this the run reports the tool the agent chose and stops there."
+    )
     .option("--json", "Print the raw JSON response")
     .action(async (opts) => {
       const api = await buildApi()
@@ -311,11 +315,13 @@ export function agentsCommand(): Command {
           outputTokens: number
           latencyMs: number
           knowledgeChunksUsed: number
+          executedToolCalls?: Array<{ name: string; ok: boolean; error?: string }>
           warnings: string[]
         }>(`/v1/agents/${agentId}/test`, {
           message: opts.message,
           ...(history.length ? { history } : {}),
           useKnowledgeBase: opts.knowledge !== false,
+          ...(opts.executeTools ? { executeTools: true } : {}),
         })
         if (opts.json) {
           process.stdout.write(JSON.stringify(res, null, 2) + "\n")
@@ -326,10 +332,20 @@ export function agentsCommand(): Command {
           return
         }
         process.stdout.write("\n" + (res.text ?? "") + "\n\n")
+        // What ran, and whether it answered. A reply built on a tool that
+        // errored reads exactly like one built on a tool that worked, so the
+        // difference has to be on screen.
+        for (const call of res.executedToolCalls ?? []) {
+          if (call.ok) ui.hint(`  ✓ ${call.name}`)
+          else ui.warn(`  ✗ ${call.name}: ${call.error ?? "no reason given"}`)
+        }
         ui.hint(
           `${res.inputTokens}→${res.outputTokens} tokens · ${res.latencyMs}ms` +
             (res.knowledgeChunksUsed
               ? ` · ${res.knowledgeChunksUsed} knowledge chunk(s)`
+              : "") +
+            (res.executedToolCalls?.length
+              ? ` · ${res.executedToolCalls.length} tool call(s)`
               : "")
         )
         // Printed loudly: the whole point is that a dry run must never be
