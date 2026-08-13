@@ -64,6 +64,14 @@ if gh release view "$TAG" -R "$RELEASE_REPO" >/dev/null 2>&1; then
   exit 1
 fi
 
+# Templates ship inside the binary; a release that does not compile them
+# publishes broken scaffolds. Nothing else opens them: they are string literals,
+# so neither `tsc` over this package nor the unit suite ever typechecks one.
+# Runs with the other preflight checks, before the version bump, so a failure
+# leaves the working tree untouched.
+echo "[release] checking templates compile as scaffolded..."
+bun run check:templates
+
 echo "[release] bumping package.json to $VERSION..."
 # Use bun to edit JSON instead of awk/sed to avoid escaping headaches.
 bun -e "

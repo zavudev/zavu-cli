@@ -24,7 +24,9 @@
     "build:linux-arm64": "bun build --compile --target=bun-linux-arm64 src/index.ts --outfile dist/zavu-linux-arm64",
     "build:windows-x64": "bun build --compile --target=bun-windows-x64 src/index.ts --outfile dist/zavu-windows-x64.exe",
     "build:all": "bun run build:macos-arm64 && bun run build:macos-x64 && bun run build:linux-x64 && bun run build:linux-arm64 && bun run build:windows-x64",
-    "test": "vitest run",
+    "test": "vitest run && bun run check:templates",
+    "_comment_check_templates": "Chained to `test` on purpose. The templates are string literals, so nothing else opens them: a template that stopped compiling shipped, and `zavudev init` handed out a project that failed `tsc --noEmit` untouched. It costs ~1s, and it means whatever finally runs the tests in CI checks them too.",
+    "check:templates": "bun scripts/check-templates.mjs",
     "_comment_prepublish": "bun build inlines package.json at BUILD time, so `npm publish` shipped whatever dist/ happened to hold. Every release since 0.6.x therefore reported an older --version than it was: the 0.6.2 tarball prints 0.6.0. Rebuilding on prepack makes the binary and the manifest agree by construction rather than by remembering.",
     "prepack": "bun run build"
   },

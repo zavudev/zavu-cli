@@ -52,6 +52,7 @@ import { agentsCommand } from "./commands/api/agents"
 import { callsCommand } from "./commands/api/calls"
 import { telegramCommand } from "./commands/api/telegram"
 import { emailDomainsCommand } from "./commands/api/emailDomains"
+import { memoryCommand } from "./commands/api/memory"
 import {
   balanceCommand,
   introspectCommand,
@@ -95,6 +96,7 @@ program.addCommand(broadcastsCommand())
 program.addCommand(phoneNumbersCommand())
 program.addCommand(invitationsCommand())
 program.addCommand(agentsCommand())
+program.addCommand(memoryCommand())
 program.addCommand(callsCommand())
 program.addCommand(telegramCommand())
 program.addCommand(emailDomainsCommand())

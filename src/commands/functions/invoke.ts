@@ -182,6 +182,26 @@ globalThis.fetch = (async (input: any, init?: any) => {
 }) as typeof fetch
 `}
 
+// ctx.memory. The deployed runtime puts it on every context, so a handler that
+// reads ctx.memory has to find one here too — otherwise the same code that
+// works in production dies locally on an undefined, which reads as "the SDK is
+// broken". Without --live the runtime keeps it in memory for the length of this
+// process and says so.
+//
+// Feature-detected, and the older internal name is tried second: a project
+// still on @zavudev/functions 0.2.x has neither, and a missing ctx.memory is
+// better than a crashed runner.
+let _ctxExtras: Record<string, any> = {}
+try {
+  const _runtime: any = await import("@zavudev/functions")
+  const _build = _runtime.createLocalContext ?? _runtime.__buildCtxExtras
+  if (typeof _build === "function") {
+    _ctxExtras = _build({})
+  }
+} catch {
+  // No runtime resolvable from here; the user's own import would have failed first.
+}
+
 const ctx = {
   awsRequestId: "local-" + Date.now(),
   getRemainingTimeInMillis: () => 30000,
@@ -189,6 +209,7 @@ const ctx = {
   functionId: ${JSON.stringify(config?.functionId ?? "fn_local")},
   slug: ${JSON.stringify(config?.slug ?? "local")},
   log: (...args: any[]) => console.log("[ctx.log]", ...args),
+  ..._ctxExtras,
 }
 
 ${toolMode ? `

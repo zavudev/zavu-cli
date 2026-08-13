@@ -26,11 +26,13 @@ import { join } from "node:path"
  * types and local execution from `npm install`.
  */
 export const RUNTIME_DEV_DEPENDENCY: Record<string, string> = {
-  // Track the published minor, not an older one. `^0.1.0` cannot resolve to
-  // 0.2.0 under semver, so a fresh scaffold installed types that predated
-  // defineFlow, knowledge bases and multi-sender agents: code straight out of
-  // the docs failed to typecheck against a runtime that supports it.
-  "@zavudev/functions": "^0.2.0",
+  // Track the published minor, not an older one. Below 1.0 a caret does not
+  // cross minors, so `^0.1.0` cannot resolve to 0.2.0 — and a scaffold left on
+  // the older range installed types that predated defineFlow, knowledge bases
+  // and multi-sender agents, so code straight out of the docs failed to
+  // typecheck against a runtime that supports it. 0.3.0 adds ctx.memory, which
+  // the restaurant template calls.
+  "@zavudev/functions": "^0.3.0",
   // The blank template imports the SDK on its first line, but it was never
   // added here, so a fresh scaffold failed with "Cannot find module
   // '@zavudev/sdk'" before the developer had changed anything. The range is

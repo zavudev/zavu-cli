@@ -10,11 +10,19 @@ import kleur from "kleur"
 import { resolveCredentials } from "./config"
 import { fail, ui } from "./ui"
 
+/** Extras a call may need beyond a path and a body. */
+export interface RequestOptions {
+  query?: Record<string, unknown>
+  /** Extra request headers, e.g. `If-Match` for a conditional write. */
+  headers?: Record<string, string>
+}
+
 export interface ApiClient {
   get<T = unknown>(path: string, query?: Record<string, unknown>): Promise<T>
-  post<T = unknown>(path: string, body?: unknown): Promise<T>
+  post<T = unknown>(path: string, body?: unknown, opts?: RequestOptions): Promise<T>
+  put<T = unknown>(path: string, body?: unknown, opts?: RequestOptions): Promise<T>
   patch<T = unknown>(path: string, body?: unknown): Promise<T>
-  del<T = unknown>(path: string): Promise<T>
+  del<T = unknown>(path: string, opts?: RequestOptions): Promise<T>
   baseUrl: string
 }
 
@@ -70,7 +78,7 @@ export async function buildApi(): Promise<ApiClient> {
   async function request<T>(
     method: string,
     path: string,
-    opts: { query?: Record<string, unknown>; body?: unknown } = {}
+    opts: { query?: Record<string, unknown>; body?: unknown; headers?: Record<string, string> } = {}
   ): Promise<T> {
     const url = new URL(path, baseUrl + "/")
     if (opts.query) {
@@ -84,6 +92,7 @@ export async function buildApi(): Promise<ApiClient> {
       headers: {
         authorization: `Bearer ${apiKey}`,
         ...(opts.body !== undefined ? { "content-type": "application/json" } : {}),
+        ...opts.headers,
       },
       body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined,
     })
@@ -109,9 +118,10 @@ export async function buildApi(): Promise<ApiClient> {
   return {
     baseUrl,
     get: (p, q) => request("GET", p, { query: q }),
-    post: (p, b) => request("POST", p, { body: b }),
+    post: (p, b, o) => request("POST", p, { body: b, ...o }),
+    put: (p, b, o) => request("PUT", p, { body: b, ...o }),
     patch: (p, b) => request("PATCH", p, { body: b }),
-    del: (p) => request("DELETE", p),
+    del: (p, o) => request("DELETE", p, o),
   }
 }
 

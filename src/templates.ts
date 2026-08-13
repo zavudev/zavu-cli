@@ -69,17 +69,26 @@ const zavu = new Zavudev({
   baseURL: process.env.ZAVU_API_BASE_URL,
 })
 
+// A function can subscribe to any event, so \`event.data\` arrives as unknown.
+// Declare the fields the event you subscribed to carries, and narrow once.
+type InboundMessage = {
+  from: string
+  channel: Zavudev.Channel
+  text?: string
+}
+
 export default defineFunction({
   on: ["message.inbound"],
   handler: async (event, ctx) => {
     if (event.type !== "message.inbound") return { ok: true }
-    const incoming = event.data.text ?? ""
-    console.log("inbound from", event.data.from, ":", incoming)
+    const message = event.data as InboundMessage
+    const incoming = message.text ?? ""
+    console.log("inbound from", message.from, ":", incoming)
 
     await zavu.messages.send({
       "Zavu-Sender": event.senderId,
-      to: event.data.from,
-      channel: event.data.channel,
+      to: message.from,
+      channel: message.channel,
       text: \`Echo from Zavu Functions: \${incoming}\`,
     })
 
@@ -104,7 +113,9 @@ export default defineFunction({
 //      correct `name` and `parameters` schema (see the comment block at the
 //      bottom of this file for ready-to-paste JSON).
 //
-// In production: swap the in-memory data for your real POS / reservation DB.
+// Bookings are written to Zavu Memory, so one survives the cold start between
+// the message that made it and the message that asks about it. The menu is
+// still demo data: swap it for your real POS in production.
 // ---------------------------------------------------------------------------
 const RESTAURANT = `// Restaurant reservations agent — fully declarative.
 //
@@ -157,9 +168,14 @@ const MENU = [
   { name: "Tiramisu", price: 7, vegan: false },
 ]
 
-// In-memory store — Lambda cold-start wipes this. For real use, persist to
-// Convex, your POS, or a third-party reservation provider.
-const reservations: Record<string, any> = {}
+// Reservations live in Zavu Memory, so they survive a cold start and are
+// shared across every invocation. \`ctx.memory.collection(name)\` creates the
+// collection on first write; nothing to provision.
+//
+// Scopes: this collection is project-wide, which is what a booking book is.
+// For state that belongs to one customer, use \`ctx.memory.contact\` — already
+// bound to whoever the agent is talking to.
+const RESERVATIONS = "reservations"
 
 defineTool({
   name: "view_menu",
@@ -236,16 +252,16 @@ defineTool({
       }
     }
     const id = \`RES-\${Date.now().toString(36).toUpperCase()}\`
-    reservations[id] = {
+    await ctx.memory.collection(RESERVATIONS).set(id, {
       id,
       date,
       time,
       partySize: Number(partySize),
       customerName,
-      phone: ctx?.contactPhone ?? null,
+      phone: ctx.contactPhone ?? null,
       status: "confirmed",
       createdAt: new Date().toISOString(),
-    }
+    })
     return {
       confirmed: true,
       reservationId: id,
@@ -265,8 +281,10 @@ defineTool({
     },
     required: ["reservationId"],
   },
-  handler: async (args) => {
-    const r = reservations[args.reservationId]
+  handler: async (args, ctx) => {
+    // \`get\` answers null when the key is not there, so a wrong code reads as
+    // "not found" rather than throwing at the customer.
+    const r = await ctx.memory.collection(RESERVATIONS).get(args.reservationId)
     if (!r) return { error: "not_found", reservationId: args.reservationId }
     return r
   },

@@ -7,6 +7,58 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `zavudev memory` manages what your agents remember between messages, in both
+  of the ways they need to.
+
+  Facts, recalled by meaning: `memory add`, `search`, `list`, `get`, `delete`,
+  and `wipe`. Use it for "she is allergic to peanuts", which nobody would think
+  to look up under a key.
+
+  Collections, read and written by key: `memory collection set` / `get` / `del`
+  / `list` / `query`. Use it for the booking, the cart, the counter. Plural
+  manages the set (`memory collections list|create|get|update|delete`) and
+  singular operates inside one (`memory collection list <name>`).
+
+  Every command takes `--scope contact:<id>` or `--scope conversation:<id>`, so
+  what an agent remembers can belong to one person or one thread instead of the
+  whole project.
+
+  `memory collection export` writes a collection to stdout as NDJSON and
+  `memory collection import` reads it back, so one can be backed up, edited
+  with ordinary text tools, and pushed to another. `memory usage` shows the
+  month against your plan's quota.
+
+  A value typed at the shell is stored as JSON when it is JSON and as a string
+  otherwise, so `memory collection set prefs theme dark` needs no quoting. Each
+  write prints the type it stored.
+
+  Available once Zavu Memory is enabled for your team.
+
+### Changed
+
+- `zavudev fn invoke` hands the handler the same `ctx.memory` it gets when
+  deployed. Without `--live` it holds its data in memory for the length of the
+  run and prints one line saying so, so a handler that reads or writes what the
+  agent remembers can be exercised locally without touching your project's data.
+
+- `zavudev init --template restaurant-booking` scaffolds an agent whose
+  reservations survive a restart. It previously kept them in a variable, so
+  every booking was lost when the function went cold and `view_reservation`
+  answered "not found" for a reservation the same conversation had just made.
+
+- A new project is scaffolded against `@zavudev/functions@^0.3.0`, which is
+  where `ctx.memory` lives. In a project you already have, run
+  `npm install -D @zavudev/functions@^0.3.0` before using it.
+
+### Fixed
+
+- `zavudev init --template blank` scaffolds a project that passes
+  `tsc --noEmit`. The echo handler did not typecheck against the strict
+  `tsconfig.json` it was scaffolded with, so a new project reported errors
+  before anyone had changed a line.
+
 ## [0.14.0] - 2026-08-10
 
 ### Added
