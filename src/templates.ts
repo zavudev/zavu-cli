@@ -28,7 +28,7 @@ defineAgent({
   senderId: process.env.SENDER_ID!,
   name: "Support",
   provider: "zavu",
-  model: "gpt-4o-mini",
+  model: "deepseek/deepseek-v4-flash",
   prompt: \`You are a support agent.
 
 When someone asks about an order, call get_order_status and answer with what it
@@ -138,7 +138,7 @@ defineAgent({
   // Provider 'zavu' uses Zavu's AI gateway — billed from your project balance,
   // no BYOK. For your own OpenAI/Anthropic key, switch provider and pass apiKey.
   provider: "zavu",
-  model: "openai/gpt-4o-mini",
+  model: "deepseek/deepseek-v4-flash",
   channels: ["whatsapp"],
   prompt: \`Eres Bella, anfitriona de Bella Pizzeria en WhatsApp.
 
