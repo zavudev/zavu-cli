@@ -54,6 +54,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `zavudev login` on Windows opens the full authorize URL. `cmd /c start`
+  was splitting on `&`, so the browser only got `?port=` and the
+  dashboard showed "Missing required parameters" while the same link
+  pasted from the terminal worked.
+
 - `zavudev init --template blank` scaffolds a project that passes
   `tsc --noEmit`. The echo handler did not typecheck against the strict
   `tsconfig.json` it was scaffolded with, so a new project reported errors

@@ -18,13 +18,13 @@
 import { Command } from "commander"
 import { createServer } from "node:http"
 import { hostname } from "node:os"
-import { spawn } from "node:child_process"
 import Zavudev from "@zavudev/sdk"
 import {
   writeCredentials,
   readCredentials,
   credentialsPath,
 } from "../lib/config"
+import { openBrowser } from "../lib/openBrowser"
 import { ui, fail, cli } from "../lib/ui"
 
 // Defaults point at production, but env vars override so a developer running
@@ -276,30 +276,6 @@ function safeHostname(): string {
   } catch {
     return "unknown-host"
   }
-}
-
-async function openBrowser(url: string): Promise<void> {
-  const platform = process.platform
-  let cmd: string
-  let args: string[]
-  if (platform === "darwin") {
-    cmd = "open"
-    args = [url]
-  } else if (platform === "win32") {
-    cmd = "cmd"
-    args = ["/c", "start", "", url]
-  } else {
-    cmd = "xdg-open"
-    args = [url]
-  }
-  await new Promise<void>((resolve, reject) => {
-    const child = spawn(cmd, args, { stdio: "ignore", detached: true })
-    child.on("error", reject)
-    child.unref()
-    // We don't wait for exit — the browser launcher returns instantly on macOS
-    // but may stay attached on Linux. Resolve once spawn() succeeded.
-    setTimeout(resolve, 50)
-  })
 }
 
 function renderHtml(ok: boolean, message?: string): string {
