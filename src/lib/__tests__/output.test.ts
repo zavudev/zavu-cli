@@ -153,10 +153,20 @@ describe("credential resolution", () => {
     const { resolveCredentials } = await import("../config")
     const creds = await resolveCredentials()
 
-    // Whitespace must fall through to the saved file (or to null), never be
-    // sent as a Bearer token — that fails as a confusing 401 instead of a
-    // clear "not logged in".
-    expect(creds?.apiKey ?? "").not.toBe("   ")
-    expect((creds?.apiKey ?? "").trim()).not.toBe("")
+    /*
+      Whitespace must fall through to the saved file, or to null — never be
+      sent as a Bearer token, which fails as a confusing 401 instead of a clear
+      "not logged in".
+
+      `null` is a passing outcome, and asserting a non-empty key was not: it
+      made this test depend on whether the machine running it happens to have
+      `~/.zavu/credentials.json`. It passed for anyone logged in and failed on
+      a clean checkout and in CI, where the `&&` in the root `test` script then
+      stopped `zavu-functions` from running at all.
+    */
+    expect(creds?.apiKey).not.toBe("   ")
+    if (creds !== null) {
+      expect(creds.apiKey.trim()).not.toBe("")
+    }
   })
 })
