@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `phone-numbers requirements --phone-number <e164>` returns the regulatory
+  requirements for the exact number you are about to buy, which are the ones
+  `buy` accepts. `--country` is no longer required when it is given.
+
+- `phone-numbers buy` accepts `--type` and a repeatable
+  `--requirement <requirementId>=<value>`, so a number in a regulated country
+  can be bought from the CLI. The value is text, or the id of an address or
+  document created beforehand. `--type` is required with `--requirement`.
+
 - `zavudev memory` manages what your agents remember between messages, in both
   of the ways they need to.
 

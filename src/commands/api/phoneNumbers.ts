@@ -1,6 +1,11 @@
 import { Command } from "commander"
 import { defineResource, loadJsonBody } from "../../lib/resource"
 import { ui, fail } from "../../lib/ui"
+import {
+  collectRepeatable,
+  parseRequirementPairs,
+  RequirementPairError,
+} from "../../lib/phoneNumberRequirements"
 
 export const phoneNumbersCommand = (): Command =>
   defineResource({
@@ -75,13 +80,20 @@ export const phoneNumbersCommand = (): Command =>
 
       cmd
         .command("requirements")
-        .description("Regulatory requirements for a country/type.")
-        .requiredOption("--country <iso>", "Two-letter ISO country code")
-        .option("--type <type>", "local | mobile | tollFree")
+        .description(
+          "Regulatory requirements for one number (--phone-number) or a country and type."
+        )
+        .option("--phone-number <e164>", "The exact number you will buy. Its ids are the ones buy accepts.")
+        .option("--country <iso>", "Two-letter ISO country code (required without --phone-number)")
+        .option("--type <type>", "local | national | mobile | tollFree")
         .action(async (opts) => {
+          if (!opts.phoneNumber && !opts.country) {
+            fail("Pass --phone-number, or --country with an optional --type.")
+          }
           const api = await apiFactory()
           try {
             const res = await api.get("/v1/phone-numbers/requirements", {
+              phoneNumber: opts.phoneNumber,
               countryCode: opts.country,
               type: opts.type,
             })
@@ -95,12 +107,30 @@ export const phoneNumbersCommand = (): Command =>
         .command("buy <phoneNumber>")
         .description("Purchase a number in E.164 format.")
         .option("--name <name>", "Custom name for the number")
+        .option("--type <type>", "local | national | mobile | tollFree (required with --requirement)")
+        .option(
+          "--requirement <requirementId=value>",
+          "A regulatory value: text, or an address or document id. Repeat for each requirement.",
+          collectRepeatable,
+        )
         .action(async (number, opts) => {
+          let requirements
+          try {
+            requirements = parseRequirementPairs(opts.requirement)
+          } catch (err) {
+            if (err instanceof RequirementPairError) fail(err.message)
+            throw err
+          }
+          if (requirements.length > 0 && !opts.type) {
+            fail("--type is required with --requirement.")
+          }
           const api = await apiFactory()
           try {
             const res = await api.post("/v1/phone-numbers", {
               phoneNumber: number,
               ...(opts.name ? { name: opts.name } : {}),
+              ...(opts.type ? { type: opts.type } : {}),
+              ...(requirements.length > 0 ? { regulatoryRequirements: requirements } : {}),
             })
             ui.success("Purchased.")
             process.stdout.write(JSON.stringify(res, null, 2) + "\n")
