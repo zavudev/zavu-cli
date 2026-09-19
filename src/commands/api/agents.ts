@@ -369,7 +369,7 @@ export function agentsCommand(): Command {
     .requiredOption("--sender <senderId>", "Sender ID")
     .option("--name <name>", "Display name")
     .option("--provider <provider>", "openai | anthropic | google | mistral | zavu")
-    .option("--model <model>", "Model id, e.g. gpt-4o-mini")
+    .option("--model <model>", "Model id, e.g. openai/gpt-5.6-luna with --provider zavu")
     .option("--api-key <key>", "Provider API key (omit if provider is 'zavu')")
     .option("--prompt <text>", "System prompt for the agent")
     .option("--prompt-file <path>", "Read system prompt from a text file")
