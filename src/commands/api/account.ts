@@ -7,7 +7,7 @@ import { ui, fail } from "../../lib/ui"
 
 export function balanceCommand(): Command {
   return new Command("balance")
-    .description("Show team balance and (if applicable) sub-account spending.")
+    .description("Show team balance, this month's app messages and spend cap, held incoming messages, and (if applicable) sub-account spending.")
     .option("--json", "Print as JSON")
     .action(async (opts) => {
       const api = await buildApi()
@@ -23,6 +23,28 @@ export function balanceCommand(): Command {
           if (res.creditLimit) {
             ui.hint(`Cap: $${(res.creditLimit / 100).toFixed(2)}`)
           }
+        }
+        // The month's state, so a team that only receives can see it is paused
+        // without sending a message to find out.
+        const app = res.appMessages
+        if (app) {
+          const of = app.included === null ? "" : ` of ${app.included.toLocaleString("en-US")}`
+          ui.hint(`App messages: ${app.used.toLocaleString("en-US")}${of} this month${res.payAsYouGo ? " (pay as you go)" : ""}`)
+          if (app.paused) {
+            const why =
+              app.paused === "allowance"
+                ? "allowance spent: add funds or upgrade"
+                : app.paused === "spend_cap"
+                  ? "spend cap reached: raise it in Billing"
+                  : "balance cannot cover the next block: add funds"
+            ui.hint(`Paused: ${why}`)
+          }
+        }
+        if (res.spendCap !== null && res.spendCap !== undefined) {
+          ui.hint(`Spend cap: $${(res.spentThisMonth / 100).toFixed(2)} of $${(res.spendCap / 100).toFixed(2)} this month`)
+        }
+        if (res.heldInbound) {
+          ui.hint(`Incoming messages on hold: ${res.heldInbound.count}, delivered once you pay`)
         }
       } catch (err) {
         fail(err instanceof Error ? err.message : String(err))
