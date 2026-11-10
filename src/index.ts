@@ -51,6 +51,7 @@ import { tenDlcCommand } from "./commands/api/tenDlc"
 import { agentsCommand } from "./commands/api/agents"
 import { callsCommand } from "./commands/api/calls"
 import { sandboxesCommand } from "./commands/api/sandboxes"
+import { projectWebhookCommand } from "./commands/api/projectWebhook"
 import { telegramCommand } from "./commands/api/telegram"
 import { emailDomainsCommand } from "./commands/api/emailDomains"
 import { memoryCommand } from "./commands/api/memory"
@@ -96,6 +97,7 @@ program.addCommand(contactsCommand())
 program.addCommand(broadcastsCommand())
 program.addCommand(phoneNumbersCommand())
 program.addCommand(invitationsCommand())
+program.addCommand(projectWebhookCommand())
 program.addCommand(agentsCommand())
 program.addCommand(memoryCommand())
 program.addCommand(callsCommand())

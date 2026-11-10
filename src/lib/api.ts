@@ -17,6 +17,13 @@ export interface RequestOptions {
   headers?: Record<string, string>
 }
 
+/** A non-2xx answer. `status` and `body` let a command handle a specific one. */
+export class ApiRequestError extends Error {
+  constructor(message: string, readonly status: number, readonly body: unknown) {
+    super(message)
+  }
+}
+
 export interface ApiClient {
   get<T = unknown>(path: string, query?: Record<string, unknown>): Promise<T>
   post<T = unknown>(path: string, body?: unknown, opts?: RequestOptions): Promise<T>
@@ -110,7 +117,7 @@ export async function buildApi(): Promise<ApiClient> {
         (parsed as any)?.error?.message ||
         `${res.status} ${res.statusText}`
       const code = (parsed as any)?.code ? ` [${(parsed as any).code}]` : ""
-      throw new Error(`${msg}${code}${formatErrorDetails(parsed)}`)
+      throw new ApiRequestError(`${msg}${code}${formatErrorDetails(parsed)}`, res.status, parsed)
     }
     return parsed as T
   }

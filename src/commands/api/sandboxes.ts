@@ -7,7 +7,7 @@ import { Command } from "commander"
 import { readFile, writeFile } from "node:fs/promises"
 import { homedir } from "node:os"
 import { join } from "node:path"
-import { buildApi, type ApiClient } from "../../lib/api"
+import { buildApi, ApiRequestError, type ApiClient } from "../../lib/api"
 import { ui, fail, cli } from "../../lib/ui"
 import { collectRepeatable } from "../../lib/phoneNumberRequirements"
 import {
@@ -152,7 +152,17 @@ export function sandboxesCommand(): Command {
       }
       const api = await buildApi()
       try {
-        const res = await api.post<{ sandbox: Sandbox }>("/v1/sandboxes", body!)
+        let res: { sandbox: Sandbox }
+        try {
+          res = await api.post<{ sandbox: Sandbox }>("/v1/sandboxes", body!)
+        } catch (err) {
+          // A retried --idempotency-key answers 409 with the sandbox the first
+          // request created. Nothing new was started or charged.
+          const replay = err instanceof ApiRequestError && err.status === 409 && (err.body as any)?.sandbox
+          if (!replay) throw err
+          res = err.body as { sandbox: Sandbox }
+          if (!opts.json) ui.info("That idempotency key was already used: this is the sandbox it created.")
+        }
         const sandbox = opts.wait ? await waitFor(api, res.sandbox.id, ["running"]) : res.sandbox
         if (opts.json) return print({ sandbox })
         ui.success(`Sandbox ${sandbox.id} is ${sandbox.status}.`)
@@ -252,6 +262,12 @@ export function sandboxesCommand(): Command {
         '  zavudev sandboxes exec <sandboxId> "pip install requests && python3 main.py"\n'
     )
     .action(async (id, words: string[], opts) => {
+      if (opts.timeout !== undefined) {
+        const n = Number(opts.timeout)
+        if (!Number.isInteger(n) || n < 1 || n > 120) {
+          fail("--timeout is a whole number of seconds from 1 to 120. Use --background for longer.")
+        }
+      }
       const api = await buildApi()
       try {
         const res = await api.post<{ result?: any; command?: { id: string } }>(sandboxPath(id, "/commands"), {
@@ -451,6 +467,8 @@ function portsCommand(): Command {
     .option("--public", "Anyone can open the URL. Without it, the URL carries an access token.")
     .option("--json", "Print the raw JSON response")
     .action(async (id, port, opts) => {
+      const n = Number(port)
+      if (!Number.isInteger(n) || n < 1 || n > 65535) fail("The port is a whole number from 1 to 65535.")
       const api = await buildApi()
       try {
         const res = await api.post<{ port: { url: string; public: boolean } }>(sandboxPath(id, "/ports"), {
@@ -487,6 +505,28 @@ function portsCommand(): Command {
     })
 
   return cmd
+}
+
+function summarizeSnapshot(s: any) {
+  ui.info(`${s.id} (${s.name}) · ${s.status} · ${s.size} · ${formatCost(s.costTotal)}`)
+  if (typeof s.sizeBytes === "number") ui.hint(`${s.sizeBytes} bytes on disk`)
+  if (s.shareCode) ui.hint("Shared. Print the code with `share`, revoke it with `unshare`.")
+  if (s.failureReason) ui.hint(`failure: ${s.failureReason}`)
+}
+
+async function waitForSnapshot(api: ApiClient, id: string): Promise<any> {
+  const deadline = Date.now() + 10 * 60 * 1000
+  for (;;) {
+    const { snapshot } = await api.get<{ snapshot: any }>(`/v1/sandbox-snapshots/${encodeURIComponent(id)}`)
+    if (snapshot.status === "ready") return snapshot
+    if (snapshot.status === "failed") {
+      fail(`The save failed${snapshot.failureReason ? `: ${snapshot.failureReason}` : "."} Its first day was refunded.`)
+    }
+    if (Date.now() > deadline) {
+      fail(`Still saving after 10 minutes. Check it with \`${cli(`sandboxes snapshots get ${id}`)}\`.`)
+    }
+    await new Promise((r) => setTimeout(r, 3000))
+  }
 }
 
 function snapshotsCommand(): Command {
@@ -531,10 +571,13 @@ function snapshotsCommand(): Command {
   cmd
     .command("get <snapshotId>")
     .description("Show a saved snapshot.")
-    .action(async (snapshotId) => {
+    .option("--json", "Print the raw JSON response")
+    .action(async (snapshotId, opts) => {
       const api = await buildApi()
       try {
-        print(await api.get(`/v1/sandbox-snapshots/${encodeURIComponent(snapshotId)}`))
+        const res = await api.get<{ snapshot: any }>(`/v1/sandbox-snapshots/${encodeURIComponent(snapshotId)}`)
+        if (opts.json) return print(res)
+        summarizeSnapshot(res.snapshot)
       } catch (err) {
         fail(errMsg(err))
       }
@@ -544,17 +587,23 @@ function snapshotsCommand(): Command {
     .command("create <sandboxId>")
     .description("Save a sandbox's disk under a name. COSTS MONEY: the first day is charged now.")
     .requiredOption("--name <name>", "1 to 64 letters, digits, spaces, dots, dashes or underscores")
+    .option("--wait", "Wait until it is ready")
     .option("--json", "Print the raw JSON response")
     .action(async (sandboxId, opts) => {
       const api = await buildApi()
       try {
-        const res = await api.post<{ snapshot: any }>("/v1/sandbox-snapshots", {
+        let { snapshot } = await api.post<{ snapshot: any }>("/v1/sandbox-snapshots", {
           sandboxId,
           name: opts.name,
         })
-        if (opts.json) return print(res)
-        ui.success(`Saving ${res.snapshot.id}.`)
-        ui.hint(`It is ready when \`${cli(`sandboxes snapshots get ${res.snapshot.id}`)}\` says so.`)
+        if (opts.wait) snapshot = await waitForSnapshot(api, snapshot.id)
+        if (opts.json) return print({ snapshot })
+        if (snapshot.status === "ready") {
+          ui.success(`Snapshot ${snapshot.id} is ready. Start from it: ${cli(`sandboxes create --from ${snapshot.id}`)}`)
+          return
+        }
+        ui.success(`Saving ${snapshot.id}.`)
+        ui.hint(`It is ready when \`${cli(`sandboxes snapshots get ${snapshot.id}`)}\` says so.`)
       } catch (err) {
         fail(errMsg(err))
       }
@@ -620,11 +669,16 @@ function environmentsCommand(): Command {
   cmd
     .command("list")
     .description("This project's environments.")
+    .option("--limit <n>", "Page size", "20")
+    .option("--cursor <cursor>", "Pagination cursor")
     .option("--json", "Print the raw JSON response")
     .action(async (opts) => {
       const api = await buildApi()
       try {
-        const res = await api.get<{ items: any[] }>("/v1/sandbox-environments")
+        const res = await api.get<{ items: any[]; nextCursor?: string | null }>("/v1/sandbox-environments", {
+          limit: opts.limit,
+          cursor: opts.cursor,
+        })
         if (opts.json) return print(res)
         if (!res.items?.length) {
           ui.info(`No environments. Create one: ${cli("sandboxes environments create <name> --env KEY=value")}`)
@@ -633,6 +687,7 @@ function environmentsCommand(): Command {
         ui.table(
           res.items.map((e) => ({ id: e.id, name: e.name, variables: String(e.variables?.length ?? 0) }))
         )
+        if (res.nextCursor) ui.hint(`More: --cursor ${res.nextCursor}`)
       } catch (err) {
         fail(errMsg(err))
       }

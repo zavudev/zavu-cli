@@ -1,5 +1,7 @@
 import { describe, it, expect } from "vitest"
-import { buildCreateBody, parseEnv, parseMetadata, parseTimeout, SandboxFlagError } from "../sandboxes"
+import { readFileSync } from "node:fs"
+import { join } from "node:path"
+import { PROJECT_WEBHOOK_EVENTS, buildCreateBody, parseEnv, parseMetadata, parseTimeout, SandboxFlagError } from "../sandboxes"
 
 // A flag read wrong starts a machine with the wrong settings, and a start is
 // billed: these are checked before anything reaches the API.
@@ -92,5 +94,16 @@ describe("buildCreateBody", () => {
 
   it("refuses an unknown size", () => {
     expect(() => buildCreateBody({ size: "huge" })).toThrow(/--size/)
+  })
+})
+
+// `project-webhook set --help` lists these. A list behind the API's hides an
+// event nobody then subscribes to.
+describe("PROJECT_WEBHOOK_EVENTS", () => {
+  it("matches the API's ProjectWebhookEvent", () => {
+    const spec = JSON.parse(readFileSync(join(__dirname, "../../../../../apps/docs/openapi.json"), "utf8"))
+    expect([...PROJECT_WEBHOOK_EVENTS].sort()).toEqual(
+      [...spec.components.schemas.ProjectWebhookEvent.enum].sort()
+    )
   })
 })

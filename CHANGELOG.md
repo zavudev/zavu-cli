@@ -25,9 +25,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   gives a port an HTTPS URL, `sandboxes ssh` authorizes your public key, and
   `sandboxes desktop` opens the machine's screen.
 
-  `sandboxes snapshots` saves, shares and deletes disks, and
-  `sandboxes environments` keeps named sets of variables to start with. Their
-  values are never shown back, only the last four characters.
+  `sandboxes snapshots` saves (`create --wait` waits until it is ready),
+  shares and deletes disks, and `sandboxes environments` keeps named sets of
+  variables to start with. Their values are never shown back, only the last
+  four characters.
+
+  Retrying `sandboxes create` with the same `--idempotency-key` prints the
+  sandbox the first call created instead of failing.
+
+- `zavudev project-webhook get|set|update|delete` configures the project
+  webhook, where invitation, broadcast, email domain and sandbox events are
+  delivered. `set` prints the signing secret once.
 
 - `phone-numbers requirements --phone-number <e164>` returns the regulatory
   requirements for the exact number you are about to buy, which are the ones

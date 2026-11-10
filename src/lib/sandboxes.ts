@@ -3,6 +3,19 @@
  * Kept apart from the command so they can be tested without the network.
  */
 
+/** What `project-webhook set --event` accepts, as the API's ProjectWebhookEvent. */
+export const PROJECT_WEBHOOK_EVENTS = [
+  "invitation.status_changed",
+  "broadcast.status_changed",
+  "domain.verified",
+  "domain.failed",
+  "sandbox.running",
+  "sandbox.stopped",
+  "sandbox.failed",
+  "sandbox_snapshot.ready",
+  "sandbox_snapshot.failed",
+] as const
+
 export class SandboxFlagError extends Error {}
 
 const ENV_KEY = /^[A-Za-z_][A-Za-z0-9_]{0,127}$/
