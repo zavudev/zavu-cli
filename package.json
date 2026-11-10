@@ -3,8 +3,14 @@
   "version": "0.15.0",
   "description": "Official CLI for Zavu — deploy Functions, send messages, manage senders & contacts.",
   "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/zavudev/zavu-cli.git"
+  },
+  "homepage": "https://www.zavu.dev/docs/guides/cli/overview",
+  "bugs": "https://github.com/zavudev/zavu-cli/issues",
   "bin": {
-    "zavudev": "./dist/zavu.js"
+    "zavudev": "dist/zavu.js"
   },
   "files": [
     "dist/zavu.js",

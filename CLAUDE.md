@@ -27,7 +27,7 @@ changed for the person using the CLI, and do they need to do anything?**
   the file, not the missing `await`, not the flag on the build tool, not the
   race in the deploy step. "Fixed" plus the observable symptom is the whole
   entry. Our bug taxonomy is not a customer's business and reads as instability.
-- **Release, CI, and build tooling.** `release.sh`, the GitHub Action, the npm
+- **Release, CI, and build tooling.** The sync, the GitHub Actions, the npm
   publish step, the tagging flow. If a botched release meant a version shipped
   wrong, the customer-facing fact is "0.9.2 reported the wrong `--version`; it is
   correct in 0.9.3." Nothing about how.
@@ -100,7 +100,11 @@ Public surface, same rules as the changelog.
 
 - `--version` matches `package.json`. The build inlines the manifest, so this is
   only true because of `prepack`. Do not remove it.
-- Move the `[Unreleased]` entries to the new version. `release.sh` bumps
-  `package.json` and does not touch the changelog.
+- Bump `version` in `package.json` in the same pull request, and move the
+  `[Unreleased]` entries under `## [<version>]`. The `CLI version bumped` check
+  fails without both. Merging to `main` publishes it; nothing else does. See
+  `RELEASING.md`.
+- Changed a dependency? Regenerate `bun.lock` here (it is this package's own,
+  used by the public mirror) as `RELEASING.md` says, or the `CLI` check fails.
 - Re-read the new entries against "Never write" above.
 - `CHANGELOG.md` is in the package `files` array, so whatever you wrote ships.
