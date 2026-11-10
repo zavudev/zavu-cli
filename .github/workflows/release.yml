@@ -61,9 +61,12 @@ jobs:
           fetch-depth: 0
 
       # `prepack` runs `bun run build`, so bun is needed by `npm publish` too.
+      # `latest`, like the monorepo's CLI job, which installs this same
+      # bun.lock with --frozen-lockfile before anything is merged. An older
+      # pin cannot read the lockfile format newer bun writes.
       - uses: oven-sh/setup-bun@v2
         with:
-          bun-version: 1.2.19
+          bun-version: latest
 
       # Trusted publishing needs Node 22.14 or later and npm 11.5.1 or later.
       - uses: actions/setup-node@v5
