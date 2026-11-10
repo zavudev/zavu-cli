@@ -1,0 +1,1197 @@
+// Agents are nested under a sender (`/v1/senders/{senderId}/agent`). All
+// commands take `--sender <senderId>` to identify the parent. Same pattern
+// for the agent's sub-resources: flows, tools, knowledge bases.
+
+import { Command } from "commander"
+import { buildApi } from "../../lib/api"
+import { loadJsonBody } from "../../lib/resource"
+import { ui, fail, cli } from "../../lib/ui"
+import { attachFactoryCommands } from "../agents/factory"
+
+function agentBase(senderId: string) {
+  return `/v1/senders/${senderId}/agent`
+}
+
+// Build the agent create/update body from individual --flags so the user
+// never has to write a JSON file (and avoid terminal-paste indentation eating
+// newlines inside `systemPrompt`). On create we require provider/model/prompt;
+// on update we accept any subset.
+async function buildAgentBodyFromFlags(
+  opts: Record<string, any>,
+  { partial = false }: { partial?: boolean } = {}
+): Promise<Record<string, unknown>> {
+  let prompt: string | undefined = opts.prompt
+  if (!prompt && opts.promptFile) {
+    const { readFile } = await import("node:fs/promises")
+    prompt = (await readFile(opts.promptFile, "utf8")).trim()
+  }
+
+  const required = ["provider", "model"]
+  if (!partial) {
+    const missing = required.filter((k) => !opts[k])
+    if (missing.length || !prompt) {
+      fail(
+        `Missing required flag(s): ${[...missing, ...(prompt ? [] : ["prompt"])]
+          .map((x) => "--" + x)
+          .join(", ")}. ` +
+          "Either pass them as flags or use --file <path> with a JSON body."
+      )
+    }
+  }
+
+  const body: Record<string, unknown> = {}
+  if (opts.name) body.name = opts.name
+  if (opts.provider) body.provider = opts.provider
+  if (opts.model) body.model = opts.model
+  if (opts.apiKey) body.apiKey = opts.apiKey
+  if (prompt) body.systemPrompt = prompt
+  if (opts.contextWindow !== undefined) {
+    const n = Number(opts.contextWindow)
+    if (Number.isFinite(n)) body.contextWindowMessages = n
+  }
+  if (opts.channels) {
+    body.triggerOnChannels = String(opts.channels)
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean)
+  }
+  if (opts.messageTypes) {
+    body.triggerOnMessageTypes = String(opts.messageTypes)
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean)
+  }
+  if (opts.enabled !== undefined) {
+    body.enabled = opts.enabled === "true" || opts.enabled === true
+  }
+
+  // The API has accepted a `voice` object on create since voice agents shipped;
+  // the CLI just never sent one, so an agent built from the terminal could not
+  // be given a voice at all. commander maps --no-voice to voice === false.
+  const voice = buildVoiceConfig(opts)
+  if (voice) body.voice = voice
+
+  return body
+}
+
+/**
+ * The `voice` object, or undefined when no voice flag was passed.
+ *
+ * A bare --voice-greeting without --voice would otherwise be silently dropped,
+ * so any voice flag implies the channel is wanted.
+ */
+function buildVoiceConfig(opts: Record<string, any>): Record<string, unknown> | undefined {
+  const detail =
+    opts.voiceGreeting || opts.voiceLanguage || opts.voiceId || opts.voiceTransferTo
+
+  if (opts.voice === false) return { enabled: false }
+  if (!opts.voice && !detail) return undefined
+
+  const voice: Record<string, unknown> = { enabled: true }
+  if (opts.voiceGreeting) voice.greeting = opts.voiceGreeting
+  if (opts.voiceLanguage) voice.language = opts.voiceLanguage
+  if (opts.voiceId) voice.ttsVoiceId = opts.voiceId
+  if (opts.voiceTransferTo) voice.transferPhoneNumber = opts.voiceTransferTo
+  return voice
+}
+
+/**
+ * Warn when the agent can talk but the sender it answers on cannot.
+ *
+ * Best-effort: a failure to read the sender must not fail an agent that was
+ * created successfully.
+ */
+async function warnIfSenderCannotSpeak(api: any, senderId: string): Promise<void> {
+  try {
+    const sender = (await api.get(`/v1/senders/${senderId}`)) as { channels?: string[] }
+    if (sender?.channels && !sender.channels.includes("voice")) {
+      ui.warn(
+        `This agent has a voice, but sender ${senderId} cannot take calls yet ` +
+          `(channels: ${sender.channels.join(", ") || "none"}). ` +
+          `Enable it with ${cli(`senders update ${senderId} --enable-voice`)}.`
+      )
+    }
+  } catch {
+    // Ignored on purpose: the agent exists either way.
+  }
+}
+
+/**
+ * Say which agent a `--sender` actually reached, and warn when others are hidden.
+ *
+ * Best-effort: this is a diagnostic aid, so a failure to list agents must not
+ * stop the test that was asked for.
+ */
+async function announceResolvedAgent(
+  api: any,
+  senderId: string,
+  agent: { id: string; name?: string },
+): Promise<void> {
+  ui.hint(`Testing ${agent.name ?? "agent"} (${agent.id})`)
+  try {
+    const res = (await api.get("/v1/agents", { limit: "100" })) as {
+      items?: Array<{ id: string; name?: string; senderIds?: string[] }>
+    }
+    const others = (res.items ?? []).filter(
+      (a) => a.id !== agent.id && (a.senderIds ?? []).includes(senderId),
+    )
+    if (others.length > 0) {
+      const names = others.map((a) => `"${a.name ?? a.id}"`).join(", ")
+      ui.warn(
+        `Sender ${senderId} has ${others.length + 1} agents. Only "${agent.name ?? agent.id}" answers; ` +
+          `${names} cannot be reached and were NOT tested. ` +
+          `Address one directly with ${cli("agents test --agent <agentId>")}.`,
+      )
+    }
+  } catch {
+    // Ignored on purpose: the test itself still ran.
+  }
+}
+
+export function agentsCommand(): Command {
+  const cmd = new Command("agents").description("AI agents attached to senders.")
+
+  cmd
+    .command("get")
+    .description("Show an agent's configuration, by agent id or by sender.")
+    // An agent id used to be accepted positionally and silently dropped, so
+    // `agents get <agentId> --sender <senderId>` answered about a DIFFERENT
+    // agent with a 200 and no warning. This is the command you reach for to
+    // check a deploy, so a wrong answer here reads as a verified one.
+    .argument("[agentId]", "Agent ID (from `agents list`)")
+    .option("--sender <senderId>", "Address the agent by its sender instead")
+    .action(async (agentId: string | undefined, opts) => {
+      if (!agentId && !opts.sender) {
+        fail("Pass an agent id (see `agents list`) or --sender <senderId>.")
+      }
+      const api = await buildApi()
+      const path = agentId ? `/v1/agents/${agentId}` : agentBase(opts.sender)
+      if (agentId && opts.sender) {
+        ui.hint(`Using agent ${agentId}; --sender ignored.`)
+      }
+      try {
+        process.stdout.write(JSON.stringify(await api.get(path), null, 2) + "\n")
+      } catch (err) {
+        fail(err instanceof Error ? err.message : String(err))
+      }
+    })
+
+  cmd
+    .command("list")
+    .description("List every agent in the project, including ones with no sender.")
+    .option("--limit <n>", "Page size", "50")
+    .option("--json", "Print the raw JSON response")
+    .action(async (opts) => {
+      const api = await buildApi()
+      try {
+        const res = await api.get<{ items: any[]; nextCursor: string | null }>(
+          "/v1/agents",
+          { limit: opts.limit }
+        )
+        if (opts.json) {
+          process.stdout.write(JSON.stringify(res, null, 2) + "\n")
+          return
+        }
+        if (!res.items?.length) {
+          ui.info("No agents yet. Create one with `agents create` or `agents pull <id>`.")
+          return
+        }
+        ui.table(
+          res.items.map((a) => ({
+            id: a.id,
+            name: a.name,
+            // A voice agent whose voice block is missing is the interesting
+            // case, so show what the agent actually is, not what it is named.
+            kind: a.voice?.enabled ? "voice" : "text",
+            enabled: a.enabled ? "yes" : "no",
+            senders: String((a.senderIds ?? []).length),
+            model: a.model,
+          }))
+        )
+        if (res.nextCursor) ui.hint("More results — pass --limit to see them.")
+      } catch (err) {
+        fail(err instanceof Error ? err.message : String(err))
+      }
+    })
+
+  // `agents senders` — an agent answers on N senders; this is how you wire them
+  // up from code. Previously only reachable from the dashboard.
+  const senders = cmd
+    .command("senders")
+    .description("Senders an agent answers on.")
+
+  senders
+    .command("connect")
+    .description("Make the agent answer on a sender.")
+    .requiredOption("--agent <agentId>", "Agent ID (see `agents list`)")
+    .requiredOption("--sender <senderId>", "Sender ID (see `senders list`)")
+    .action(async (opts) => {
+      const api = await buildApi()
+      try {
+        const res = await api.post<{ agent: { senderIds?: string[] } }>(
+          `/v1/agents/${opts.agent}/senders`,
+          { senderId: opts.sender }
+        )
+        ui.success("Sender connected.")
+        ui.hint(`now answering on ${(res.agent.senderIds ?? []).length} sender(s)`)
+      } catch (err) {
+        fail(err instanceof Error ? err.message : String(err))
+      }
+    })
+
+  senders
+    .command("disconnect")
+    .description("Stop the agent answering on a sender.")
+    .requiredOption("--agent <agentId>", "Agent ID")
+    .requiredOption("--sender <senderId>", "Sender ID")
+    .action(async (opts) => {
+      const api = await buildApi()
+      try {
+        await api.del(`/v1/agents/${opts.agent}/senders/${opts.sender}`)
+        ui.success("Sender disconnected.")
+      } catch (err) {
+        fail(err instanceof Error ? err.message : String(err))
+      }
+    })
+
+  // `agents test` — the inner loop. Runs the agent and prints what it WOULD
+  // reply, without sending anything to anyone and without charging the account,
+  // so it is safe to run on every prompt edit. Everything else in this CLI
+  // either needs a real channel or is read-only postmortem.
+  cmd
+    .command("test")
+    .description("Send the agent a message and print its reply. Nothing is delivered.")
+    .option("--agent <agentId>", "Agent ID (from `agents list`)")
+    .option("--sender <senderId>", "Sender ID, if you'd rather address the agent by its sender")
+    .requiredOption("--message <text>", "What to say to the agent")
+    .option(
+      "--turn <text...>",
+      "Prior turns, alternating user/assistant, oldest first (repeatable)"
+    )
+    .option("--no-knowledge", "Skip knowledge-base retrieval")
+    .option(
+      "--execute-tools",
+      "Actually run the tools the agent calls. Their handlers do whatever they do for real: charge, write, notify. Without this the run reports the tool the agent chose and stops there."
+    )
+    .option("--json", "Print the raw JSON response")
+    .action(async (opts) => {
+      const api = await buildApi()
+      // An agent is addressed by its own id. `--sender` resolves through the
+      // sender-scoped lookup, which only ever finds ONE agent per sender.
+      let agentId: string | undefined = opts.agent
+      if (!agentId) {
+        if (!opts.sender) {
+          fail("Pass --agent <agentId> (see `agents list`) or --sender <senderId>.")
+          return
+        }
+        try {
+          const res = await api.get<{ agent: { id: string } | null }>(agentBase(opts.sender))
+          if (!res.agent) {
+            fail("That sender has no agent.")
+            return
+          }
+          agentId = res.agent.id
+          // A sender resolves to exactly one agent, so when several are
+          // attached the others are unreachable and this silently tests the
+          // winner. The reply is fluent and on-topic, which is precisely what
+          // makes it read as a pass for the agent you just deployed.
+          await announceResolvedAgent(api, opts.sender, res.agent)
+        } catch (err) {
+          fail(err instanceof Error ? err.message : String(err))
+          return
+        }
+      }
+      // Alternating from the user, because a conversation always opens with one.
+      const history = (opts.turn ?? []).map((content: string, i: number) => ({
+        role: i % 2 === 0 ? "user" : "assistant",
+        content,
+      }))
+      try {
+        const res = await api.post<{
+          success: boolean
+          text: string | null
+          error: string | null
+          inputTokens: number
+          outputTokens: number
+          latencyMs: number
+          knowledgeChunksUsed: number
+          executedToolCalls?: Array<{ name: string; ok: boolean; error?: string }>
+          warnings: string[]
+        }>(`/v1/agents/${agentId}/test`, {
+          message: opts.message,
+          ...(history.length ? { history } : {}),
+          useKnowledgeBase: opts.knowledge !== false,
+          ...(opts.executeTools ? { executeTools: true } : {}),
+        })
+        if (opts.json) {
+          process.stdout.write(JSON.stringify(res, null, 2) + "\n")
+          return
+        }
+        if (!res.success) {
+          fail(res.error || "Agent run failed")
+          return
+        }
+        process.stdout.write("\n" + (res.text ?? "") + "\n\n")
+        // What ran, and whether it answered. A reply built on a tool that
+        // errored reads exactly like one built on a tool that worked, so the
+        // difference has to be on screen.
+        for (const call of res.executedToolCalls ?? []) {
+          if (call.ok) ui.hint(`  ✓ ${call.name}`)
+          else ui.warn(`  ✗ ${call.name}: ${call.error ?? "no reason given"}`)
+        }
+        ui.hint(
+          `${res.inputTokens}→${res.outputTokens} tokens · ${res.latencyMs}ms` +
+            (res.knowledgeChunksUsed
+              ? ` · ${res.knowledgeChunksUsed} knowledge chunk(s)`
+              : "") +
+            (res.executedToolCalls?.length
+              ? ` · ${res.executedToolCalls.length} tool call(s)`
+              : "")
+        )
+        // Printed loudly: the whole point is that a dry run must never be
+        // mistaken for proof that the agent works on a real channel.
+        for (const w of res.warnings ?? []) ui.warn(w)
+      } catch (err) {
+        fail(err instanceof Error ? err.message : String(err))
+      }
+    })
+
+  // `agents create` — two modes:
+  //   (a) Named flags. Each option is its own shell arg so terminal paste
+  //       indentation / line-wrap can't corrupt the value. Easier 95% path.
+  //   (b) --data / --file fallback for full JSON when you need to set
+  //       advanced fields (triggerOnChannels, includeContactMetadata, etc.).
+  cmd
+    .command("create")
+    .description(
+      "Create an agent. Use --prompt + --provider + --model for the common path, or --file for full JSON."
+    )
+    .requiredOption("--sender <senderId>", "Sender ID")
+    .option("--name <name>", "Display name")
+    .option("--provider <provider>", "openai | anthropic | google | mistral | zavu")
+    .option("--model <model>", "Model id, e.g. openai/gpt-5.6-luna with --provider zavu")
+    .option("--api-key <key>", "Provider API key (omit if provider is 'zavu')")
+    .option("--prompt <text>", "System prompt for the agent")
+    .option("--prompt-file <path>", "Read system prompt from a text file")
+    .option("--context-window <n>", "Previous messages included as context", "10")
+    .option(
+      "--channels <list>",
+      "Comma-separated channels that trigger the agent",
+      "*"
+    )
+    .option(
+      "--message-types <list>",
+      "Comma-separated message types that trigger the agent",
+      "text"
+    )
+    .option("--enabled <bool>", "Answer real messages right away. Default false.")
+    .option("--voice", "Let this agent answer and place phone calls")
+    .option("--voice-greeting <text>", "Opening line when a call connects")
+    .option("--voice-language <code>", "BCP-47 tag (en, es, pt-BR), or 'auto' to follow the caller")
+    .option("--voice-id <id>", "Synthesized voice. List them with `agents voices`.")
+    .option("--voice-transfer-to <e164>", "Number the agent can hand the call to")
+    .option("--data <json>", "Full JSON body (advanced)")
+    .option("--file <path>", "Path to a JSON body file (advanced)")
+    .action(async (opts) => {
+      const body =
+        opts.data || opts.file
+          ? await loadJsonBody(opts)
+          : await buildAgentBodyFromFlags(opts)
+      const api = await buildApi()
+      try {
+        const res = await api.post<{ agent?: { enabled?: boolean } }>(
+          agentBase(opts.sender),
+          body
+        )
+        ui.success("Agent created.")
+        // An agent is created off. Saying so here — rather than leaving it as
+        // one line of a 25-line JSON blob — is the difference between knowing
+        // and finding out when nobody gets an answer.
+        if (res.agent && res.agent.enabled === false) {
+          ui.warn(
+            "Created disabled: it will not answer real messages yet. Turn it on with `agents update --sender <id> --enabled true`."
+          )
+        }
+        // A voice agent on a sender whose voice channel is off is exactly the
+        // half-built resource these QA rounds kept finding: it looks configured
+        // and never rings. `channels` is computed, so this is the real state.
+        const voiceCfg = (body as Record<string, any>).voice as { enabled?: boolean } | undefined
+        if (voiceCfg?.enabled) {
+          await warnIfSenderCannotSpeak(api, opts.sender)
+        }
+        process.stdout.write(JSON.stringify(res, null, 2) + "\n")
+      } catch (err) {
+        fail(err instanceof Error ? err.message : String(err))
+      }
+    })
+
+  cmd
+    .command("update")
+    .description("Update an agent. Mirror of `create` — same flag names, all optional.")
+    .requiredOption("--sender <senderId>", "Sender ID")
+    .option("--name <name>", "Display name")
+    .option("--enabled <bool>", "true | false")
+    .option("--provider <provider>")
+    .option("--model <model>")
+    .option("--api-key <key>")
+    .option("--prompt <text>")
+    .option("--prompt-file <path>")
+    .option("--context-window <n>")
+    .option("--channels <list>")
+    .option("--message-types <list>")
+    .option("--voice", "Let this agent answer and place phone calls")
+    .option("--no-voice", "Stop this agent taking calls")
+    .option("--voice-greeting <text>")
+    .option("--voice-language <code>")
+    .option("--voice-id <id>")
+    .option("--voice-transfer-to <e164>")
+    .option("--data <json>", "Full JSON body (advanced)")
+    .option("--file <path>", "Path to a JSON body file (advanced)")
+    .action(async (opts) => {
+      const body =
+        opts.data || opts.file
+          ? await loadJsonBody(opts)
+          : await buildAgentBodyFromFlags(opts, { partial: true })
+      const api = await buildApi()
+      try {
+        const res = await api.patch(agentBase(opts.sender), body)
+        ui.success("Updated.")
+        process.stdout.write(JSON.stringify(res, null, 2) + "\n")
+      } catch (err) {
+        fail(err instanceof Error ? err.message : String(err))
+      }
+    })
+
+  cmd
+    .command("delete")
+    .requiredOption("--sender <senderId>", "Sender ID")
+    .action(async (opts) => {
+      const api = await buildApi()
+      try {
+        await api.del(agentBase(opts.sender))
+        ui.success("Deleted.")
+      } catch (err) {
+        fail(err instanceof Error ? err.message : String(err))
+      }
+    })
+
+  // Referenced by `--voice-id` on create/update. Without it the only way to
+  // learn a valid id was to open the dashboard and read a dropdown.
+  cmd
+    .command("voices")
+    .description("List the voices an agent can speak with.")
+    .option("--language <code>", "Only voices for this language (en, es, pt-BR...)")
+    .option("--json", "Print the raw JSON response")
+    .action(async (opts) => {
+      const api = await buildApi()
+      try {
+        const res = (await api.get("/v1/agents/voices", {
+          language: opts.language,
+        })) as { items?: Array<{ id: string; name: string; language: string }>; languages?: string[] }
+
+        if (opts.json) {
+          process.stdout.write(JSON.stringify(res, null, 2) + "\n")
+          return
+        }
+        if (!res.items?.length) {
+          ui.info(`No voices for language "${opts.language}".`)
+          if (res.languages?.length) ui.hint(`Available: ${res.languages.join(", ")}`)
+          return
+        }
+        for (const v of res.items) {
+          process.stdout.write(`${v.language.padEnd(6)} ${v.name.padEnd(12)} ${v.id}\n`)
+        }
+        ui.hint(`Use one with ${cli("agents create --voice --voice-id <id>")}`)
+      } catch (err) {
+        fail(err instanceof Error ? err.message : String(err))
+      }
+    })
+
+  cmd
+    .command("stats")
+    .description("Messaging stats for an agent. Voice calls are not counted; see `calls list`.")
+    .requiredOption("--sender <senderId>", "Sender ID")
+    .action(async (opts) => {
+      const api = await buildApi()
+      try {
+        process.stdout.write(
+          JSON.stringify(await api.get(`${agentBase(opts.sender)}/stats`), null, 2) + "\n"
+        )
+      } catch (err) {
+        fail(err instanceof Error ? err.message : String(err))
+      }
+    })
+
+  // `executions` is a command group with `list` (default) and `get` subcommands.
+  // For backwards-compat we still accept `npx zavudev agents executions --sender X`
+  // (no subcommand) and treat it as `list`.
+  const executions = cmd
+    .command("executions")
+    .description(
+      "Agent execution history for messaging (list / get single). Voice calls are recorded as calls, not executions."
+    )
+
+  executions
+    .command("list", { isDefault: true })
+    .description("List recent agent executions.")
+    .requiredOption("--sender <senderId>", "Sender ID")
+    .option("--status <status>", "Filter by status")
+    .option("--limit <n>", "Page size", "20")
+    .option("--json", "Output full JSON (includes errorMessage)")
+    .action(async (opts) => {
+      const api = await buildApi()
+      try {
+        const res = await api.get<{ items: any[] }>(`${agentBase(opts.sender)}/executions`, {
+          status: opts.status,
+          limit: opts.limit,
+        })
+        if (!res.items?.length) {
+          ui.info("No executions.")
+          // An execution is one inbound message answered by the agent. Voice
+          // calls are multi-turn and are recorded as calls instead, so a
+          // voice-only agent reads as "never ran" here no matter how many calls
+          // it handled. Said at the point of confusion, not just in the docs.
+          ui.hint(`Voice calls are not executions. For phone activity: ${cli("calls list")}`)
+          return
+        }
+        if (opts.json) {
+          console.log(JSON.stringify(res, null, 2))
+          return
+        }
+        ui.table(
+          res.items.map((e) => ({
+            id: e.id,
+            status: e.status,
+            // The column that answers "it said it would look something up and
+            // nothing reached my server". A success with 0 tools is exactly
+            // that, and without this it reads the same as one that fetched
+            // real data. Older executions have no count at all, which is not
+            // the same as zero, so they print "—".
+            tools: e.toolCalls == null ? "—" : String(e.toolCalls),
+            tokens: `${e.inputTokens ?? 0}+${e.outputTokens ?? 0}`,
+            cost: e.cost != null ? `$${e.cost.toFixed(4)}` : "—",
+            ms: String(e.latencyMs ?? "—"),
+          }))
+        )
+        // Surface the error reason for any failed executions so the user
+        // doesn't have to drop to curl to diagnose. Truncated to keep the
+        // output tight; --json shows the full payload.
+        const errored = res.items.filter((e) => e.status !== "success" && e.errorMessage)
+        if (errored.length > 0) {
+          ui.info("\nError details:")
+          for (const e of errored) {
+            const msg = String(e.errorMessage).slice(0, 200)
+            ui.hint(`${e.id}  [${e.errorCode ?? e.status}]  ${msg}`)
+          }
+        }
+      } catch (err) {
+        fail(err instanceof Error ? err.message : String(err))
+      }
+    })
+
+  executions
+    .command("get <executionId>")
+    .description("Show a single execution with full error/response details.")
+    .requiredOption("--sender <senderId>", "Sender ID")
+    .option("--json", "Output full JSON")
+    .action(async (executionId, opts) => {
+      const api = await buildApi()
+      try {
+        const res = await api.get<{ execution: any }>(
+          `${agentBase(opts.sender)}/executions/${executionId}`
+        )
+        const e = res.execution
+        if (opts.json) {
+          console.log(JSON.stringify(e, null, 2))
+          return
+        }
+        // Human-readable detail view. Keep it dense but scannable.
+        ui.info(`id:           ${e.id}`)
+        ui.info(`agentId:      ${e.agentId}`)
+        ui.info(`status:       ${e.status}`)
+        if (e.inboundMessageId) ui.info(`inboundMsg:   ${e.inboundMessageId}`)
+        if (e.responseMessageId) ui.info(`responseMsg:  ${e.responseMessageId}`)
+        ui.info(`tokens in:    ${e.inputTokens ?? 0}`)
+        ui.info(`tokens out:   ${e.outputTokens ?? 0}`)
+        ui.info(`cost:         $${(e.cost ?? 0).toFixed(6)}`)
+        ui.info(`latency:      ${e.latencyMs ?? "—"} ms`)
+        ui.info(`createdAt:    ${e.createdAt}`)
+        if (e.errorMessage) {
+          ui.info(`\nerror code:   ${e.errorCode ?? "(none)"}`)
+          ui.info(`error message:`)
+          ui.hint(e.errorMessage)
+        }
+        if (e.responseText) {
+          ui.info(`\nresponse text:`)
+          ui.hint(e.responseText)
+        }
+      } catch (err) {
+        fail(err instanceof Error ? err.message : String(err))
+      }
+    })
+
+  // Reset the agent's conversation context for one contact. Common dev loop:
+  //   1. edit code
+  //   2. npx zavudev deploy
+  //   3. npx zavudev agents reset-thread --sender X --contact +1415...
+  //   4. send a test message — agent starts fresh, no leftover context
+  cmd
+    .command("reset-thread")
+    .description("Close the active conversation thread + flow sessions for one contact so the agent starts fresh on the next inbound.")
+    .requiredOption("--sender <senderId>", "Sender ID")
+    .option("--contact <identifier>", "Phone (E.164), email, or 'telegram:<chatId>'")
+    .option("--contact-id <id>", "Contact ID (skip identifier lookup)")
+    .action(async (opts) => {
+      const api = await buildApi()
+      if (!opts.contact && !opts.contactId) {
+        fail("Pass --contact <phone|email|telegram:id> or --contact-id <id>")
+      }
+      try {
+        const res = await api.post<{ threadsClosed: number; sessionsClosed: number }>(
+          `${agentBase(opts.sender)}/threads/reset`,
+          opts.contactId
+            ? { contactId: opts.contactId }
+            : { contactIdentifier: opts.contact }
+        )
+        ui.success(
+          `Closed ${res.threadsClosed} thread${res.threadsClosed === 1 ? "" : "s"} and ${res.sessionsClosed} session${res.sessionsClosed === 1 ? "" : "s"}. Next inbound starts fresh.`
+        )
+      } catch (err) {
+        fail(err instanceof Error ? err.message : String(err))
+      }
+    })
+
+  // Sub-resources: flows, tools, knowledge-bases. Tools have a dedicated
+  // flag-friendly subgroup because its `parameters` field is a nested JSON
+  // schema — using --file is unavoidable for that part, but the rest
+  // (name, description, webhook) is easier as discrete flags.
+  attachToolsSubResource(cmd)
+  attachSubResource(cmd, "flows", "flowId", "/flows", { create: true, update: true, remove: true })
+  const kb = attachSubResource(cmd, "knowledge-bases", "kbId", "/knowledge-bases", {
+    create: true,
+    update: true,
+    remove: true,
+    createFlags: [
+      { key: "name", description: "Knowledge base name" },
+      { key: "description", description: "What this knowledge base holds" },
+    ],
+  })
+  attachKnowledgeBaseDocuments(kb)
+
+  // Factory agents: `npx zavudev agents catalog` + `npx zavudev agents pull <id>`.
+  attachFactoryCommands(cmd)
+
+  return cmd
+}
+
+function attachToolsSubResource(parent: Command) {
+  const sub = parent.command("tools").description("Manage agent tools.")
+
+  sub
+    .command("list")
+    .requiredOption("--sender <senderId>", "Sender ID")
+    .option("--limit <n>", "Page size", "20")
+    .action(async (opts) => {
+      const api = await buildApi()
+      try {
+        const res = await api.get(`${agentBase(opts.sender)}/tools`, {
+          limit: opts.limit,
+        })
+        process.stdout.write(JSON.stringify(res, null, 2) + "\n")
+      } catch (err) {
+        fail(err instanceof Error ? err.message : String(err))
+      }
+    })
+
+  sub
+    .command("get <toolId>")
+    .requiredOption("--sender <senderId>", "Sender ID")
+    .action(async (toolId, opts) => {
+      const api = await buildApi()
+      try {
+        const res = await api.get(`${agentBase(opts.sender)}/tools/${toolId}`)
+        process.stdout.write(JSON.stringify(res, null, 2) + "\n")
+      } catch (err) {
+        fail(err instanceof Error ? err.message : String(err))
+      }
+    })
+
+  // Flag-first tool create. The hard-to-paste fields (--description,
+  // --webhook) are discrete shell args; the only JSON-only piece is the
+  // parameters schema, which goes through --params-file or --params.
+  sub
+    .command("create")
+    .description(
+      "Create a tool. Pass --name + --description + --webhook + --params-file."
+    )
+    .requiredOption("--sender <senderId>", "Sender ID")
+    .option("--name <name>", "Tool name (lowercase_snake_case)")
+    .option("--description <text>", "What the tool does — the LLM reads this")
+    .option("--webhook <url>", "HTTPS endpoint to POST tool calls to")
+    .option("--secret <secret>", "Optional HMAC secret for X-Zavu-Signature")
+    .option("--params <json>", "Inline JSON schema for parameters")
+    .option("--params-file <path>", "Path to a JSON file with the parameters schema")
+    .option("--data <json>", "Full JSON body (advanced — skips other flags)")
+    .option("--file <path>", "Full JSON body file (advanced)")
+    .action(async (opts) => {
+      const body =
+        opts.data || opts.file
+          ? await loadJsonBody(opts)
+          : await buildToolBodyFromFlags(opts)
+      const api = await buildApi()
+      try {
+        const res = await api.post(`${agentBase(opts.sender)}/tools`, body)
+        ui.success("Tool created.")
+        process.stdout.write(JSON.stringify(res, null, 2) + "\n")
+      } catch (err) {
+        fail(err instanceof Error ? err.message : String(err))
+      }
+    })
+
+  sub
+    .command("update <toolId>")
+    .requiredOption("--sender <senderId>", "Sender ID")
+    .option("--name <name>")
+    .option("--description <text>")
+    .option("--webhook <url>")
+    .option("--secret <secret>")
+    .option("--params <json>")
+    .option("--params-file <path>")
+    .option("--enabled <bool>")
+    .option("--data <json>")
+    .option("--file <path>")
+    .action(async (toolId, opts) => {
+      const body =
+        opts.data || opts.file
+          ? await loadJsonBody(opts)
+          : await buildToolBodyFromFlags(opts, { partial: true })
+      const api = await buildApi()
+      try {
+        const res = await api.patch(
+          `${agentBase(opts.sender)}/tools/${toolId}`,
+          body
+        )
+        ui.success("Updated.")
+        process.stdout.write(JSON.stringify(res, null, 2) + "\n")
+      } catch (err) {
+        fail(err instanceof Error ? err.message : String(err))
+      }
+    })
+
+  sub
+    .command("delete <toolId>")
+    .requiredOption("--sender <senderId>", "Sender ID")
+    .action(async (toolId, opts) => {
+      const api = await buildApi()
+      try {
+        await api.del(`${agentBase(opts.sender)}/tools/${toolId}`)
+        ui.success("Deleted.")
+      } catch (err) {
+        fail(err instanceof Error ? err.message : String(err))
+      }
+    })
+
+  // Running a tool was REST-only, so the answer to "my agent says it will look
+  // something up and nothing reaches my server" was: write a curl. This is the
+  // one check that separates a broken tool from a model that never called it,
+  // and it belongs where the rest of the debugging happens.
+  sub
+    .command("test <toolId>")
+    .description("Run a tool now and print what it answered. This calls the real webhook.")
+    .requiredOption("--sender <senderId>", "Sender ID")
+    .option("--params <json>", "Arguments to call the tool with", "{}")
+    .option("--params-file <path>", "Read the arguments from a JSON file")
+    .option("--json", "Print the raw response")
+    .action(async (toolId, opts) => {
+      let params: Record<string, unknown>
+      if (opts.paramsFile) {
+        const { readFile } = await import("node:fs/promises")
+        const raw = await readFile(opts.paramsFile, "utf8")
+        try {
+          params = JSON.parse(raw)
+        } catch (err) {
+          fail(`${opts.paramsFile}: ${err instanceof Error ? err.message : String(err)}`)
+          return
+        }
+      } else {
+        try {
+          params = JSON.parse(opts.params)
+        } catch (err) {
+          fail(`--params is not valid JSON: ${err instanceof Error ? err.message : String(err)}`)
+          return
+        }
+      }
+
+      const api = await buildApi()
+      try {
+        const res = await api.post<{ run?: ToolTestRun }>(
+          `${agentBase(opts.sender)}/tools/${toolId}/test`,
+          { testParams: params }
+        )
+        if (opts.json) {
+          process.stdout.write(JSON.stringify(res, null, 2) + "\n")
+          return
+        }
+        printToolRun(res.run)
+      } catch (err) {
+        fail(err instanceof Error ? err.message : String(err))
+      }
+    })
+
+  sub
+    .command("rotate-secret <toolId>")
+    .description("Generate a new signing secret for this tool's webhook. The old one stops working.")
+    .requiredOption("--sender <senderId>", "Sender ID")
+    .action(async (toolId, opts) => {
+      const api = await buildApi()
+      try {
+        const res = await api.post<{ secret: string }>(
+          `${agentBase(opts.sender)}/tools/${toolId}/webhook/secret`
+        )
+        ui.success("New secret generated. Save it, it is not shown again.")
+        process.stdout.write(`${res.secret}\n`)
+      } catch (err) {
+        fail(err instanceof Error ? err.message : String(err))
+      }
+    })
+
+  sub
+    .command("test-runs <toolId>")
+    .description("Recent runs of this tool from `tools test`. Live agent calls are not listed.")
+    .requiredOption("--sender <senderId>", "Sender ID")
+    .option("--limit <n>", "How many to show", "10")
+    .option("--json", "Print the raw response")
+    .action(async (toolId, opts) => {
+      const api = await buildApi()
+      try {
+        const res = await api.get<{ items?: ToolTestRun[] }>(
+          `${agentBase(opts.sender)}/tools/${toolId}/test-runs`,
+          { limit: opts.limit }
+        )
+        if (opts.json) {
+          process.stdout.write(JSON.stringify(res, null, 2) + "\n")
+          return
+        }
+        if (!res.items?.length) {
+          ui.info("No runs yet.")
+          ui.hint(`Run one with ${cli("agents tools test <toolId> --sender <senderId>")}`)
+          return
+        }
+        ui.table(
+          res.items.map((r) => ({
+            when: r.createdAt ?? "—",
+            result: r.success ? "ok" : "failed",
+            http: r.statusCode == null ? "—" : String(r.statusCode),
+            ms: String(r.durationMs ?? "—"),
+          }))
+        )
+        // The reason a run failed is the whole point of looking, so it goes on
+        // screen rather than behind --json.
+        for (const r of res.items.filter((x) => !x.success && x.error)) {
+          ui.hint(`${r.createdAt ?? ""}  ${String(r.error).slice(0, 200)}`)
+        }
+      } catch (err) {
+        fail(err instanceof Error ? err.message : String(err))
+      }
+    })
+}
+
+export interface ToolTestRun {
+  id?: string
+  success?: boolean
+  statusCode?: number | null
+  response?: string | null
+  error?: string | null
+  durationMs?: number
+  createdAt?: string
+}
+
+/**
+ * One run, printed so the outcome is unmissable.
+ *
+ * A tool that answered with a non-2xx is a FAILED run, not a failed command:
+ * the endpoint returns 200 either way. Printing "ok" for both is how the old
+ * `{"scheduled": true}` misled people, so success and failure have to look
+ * different here.
+ */
+export function printToolRun(run: ToolTestRun | undefined): void {
+  if (!run) {
+    fail("The API did not return a run.")
+    return
+  }
+  const http = run.statusCode == null ? "no response" : `HTTP ${run.statusCode}`
+  if (run.success) {
+    ui.success(`Ran in ${run.durationMs ?? "?"}ms · ${http}`)
+  } else {
+    ui.warn(`Failed after ${run.durationMs ?? "?"}ms · ${http}`)
+  }
+  if (run.response) {
+    ui.info("Response:")
+    process.stdout.write(run.response + "\n")
+  }
+  if (run.error) {
+    ui.info("Error:")
+    process.stdout.write(run.error + "\n")
+  }
+}
+
+async function buildToolBodyFromFlags(
+  opts: Record<string, any>,
+  { partial = false }: { partial?: boolean } = {}
+): Promise<Record<string, unknown>> {
+  // Parameters schema: --params (inline) wins over --params-file. If neither
+  // given on create, default to an empty object schema so the call succeeds.
+  let parameters: Record<string, unknown> | undefined
+  if (opts.params) {
+    try {
+      parameters = JSON.parse(opts.params)
+    } catch (err) {
+      fail(`--params is not valid JSON: ${err instanceof Error ? err.message : String(err)}`)
+    }
+  } else if (opts.paramsFile) {
+    const { readFile } = await import("node:fs/promises")
+    const raw = await readFile(opts.paramsFile, "utf8")
+    try {
+      parameters = JSON.parse(raw)
+    } catch (err) {
+      fail(`${opts.paramsFile}: ${err instanceof Error ? err.message : String(err)}`)
+    }
+  }
+
+  if (!partial) {
+    const missing: string[] = []
+    if (!opts.name) missing.push("--name")
+    if (!opts.description) missing.push("--description")
+    if (!opts.webhook) missing.push("--webhook")
+    if (missing.length) {
+      fail(
+        `Missing required flag(s): ${missing.join(", ")}. ` +
+          "Or pass --file <path> with a full JSON body."
+      )
+    }
+    if (!parameters) {
+      parameters = { type: "object", properties: {}, required: [] }
+    }
+  }
+
+  const body: Record<string, unknown> = {}
+  if (opts.name) body.name = opts.name
+  if (opts.description) body.description = opts.description
+  if (opts.webhook) body.webhookUrl = opts.webhook
+  if (opts.secret) body.webhookSecret = opts.secret
+  if (parameters) body.parameters = parameters
+  if (opts.enabled !== undefined) {
+    body.enabled = opts.enabled === "true" || opts.enabled === true
+  }
+  return body
+}
+
+/**
+ * Documents inside a knowledge base.
+ *
+ * Without these, the CLI could create an empty knowledge base and nothing else,
+ * so retrieval — the difference between an agent that cites your docs and one
+ * that invents them — was reachable only by hand-rolling REST calls.
+ */
+function attachKnowledgeBaseDocuments(kb: Command) {
+  const docs = kb
+    .command("documents")
+    .description("Documents inside a knowledge base. This is what RAG retrieves.")
+
+  const docsBase = (senderId: string, kbId: string) =>
+    `${agentBase(senderId)}/knowledge-bases/${kbId}/documents`
+
+  docs
+    .command("list")
+    .requiredOption("--sender <senderId>", "Sender ID")
+    .requiredOption("--kb <kbId>", "Knowledge base ID")
+    .option("--limit <n>", "Page size", "50")
+    .action(async (opts) => {
+      const api = await buildApi()
+      try {
+        const res = await api.get(docsBase(opts.sender, opts.kb), { limit: opts.limit })
+        process.stdout.write(JSON.stringify(res, null, 2) + "\n")
+      } catch (err) {
+        fail(err instanceof Error ? err.message : String(err))
+      }
+    })
+
+  docs
+    .command("add")
+    .description("Add a document. It is chunked and embedded automatically.")
+    .requiredOption("--sender <senderId>", "Sender ID")
+    .requiredOption("--kb <kbId>", "Knowledge base ID")
+    .requiredOption("--title <title>", "Document title")
+    .option("--content <text>", "Document body")
+    // A knowledge base is usually a file on disk, not something you paste into
+    // a shell — and pasting loses the newlines that chunking relies on.
+    .option("--content-file <path>", "Read the body from a file")
+    .action(async (opts) => {
+      let content: string | undefined = opts.content
+      if (!content && opts.contentFile) {
+        const { readFile } = await import("node:fs/promises")
+        content = await readFile(opts.contentFile, "utf8")
+      }
+      if (!content) {
+        fail("Provide the document body with --content <text> or --content-file <path>.")
+        return
+      }
+      const api = await buildApi()
+      try {
+        const res = await api.post(docsBase(opts.sender, opts.kb), {
+          title: opts.title,
+          content,
+        })
+        ui.success("Document added.")
+        process.stdout.write(JSON.stringify(res, null, 2) + "\n")
+        ui.hint(
+          "Processing takes a few seconds. Verify with `agents test` — it reports how many knowledge chunks were used."
+        )
+      } catch (err) {
+        fail(err instanceof Error ? err.message : String(err))
+      }
+    })
+
+  docs
+    .command("get <docId>")
+    .requiredOption("--sender <senderId>", "Sender ID")
+    .requiredOption("--kb <kbId>", "Knowledge base ID")
+    .action(async (docId, opts) => {
+      const api = await buildApi()
+      try {
+        const res = await api.get(`${docsBase(opts.sender, opts.kb)}/${docId}`)
+        process.stdout.write(JSON.stringify(res, null, 2) + "\n")
+      } catch (err) {
+        fail(err instanceof Error ? err.message : String(err))
+      }
+    })
+
+  docs
+    .command("delete <docId>")
+    .requiredOption("--sender <senderId>", "Sender ID")
+    .requiredOption("--kb <kbId>", "Knowledge base ID")
+    .action(async (docId, opts) => {
+      const api = await buildApi()
+      try {
+        await api.del(`${docsBase(opts.sender, opts.kb)}/${docId}`)
+        ui.success("Deleted.")
+      } catch (err) {
+        fail(err instanceof Error ? err.message : String(err))
+      }
+    })
+}
+
+function attachSubResource(
+  parent: Command,
+  groupName: string,
+  idArg: string,
+  pathSuffix: string,
+  ops: {
+    create?: boolean
+    update?: boolean
+    remove?: boolean
+    createFlags?: Array<{ key: string; description: string }>
+  }
+): Command {
+  const sub = parent
+    .command(groupName)
+    .description(`Manage agent ${groupName.replace(/-/g, " ")}.`)
+
+  sub
+    .command("list")
+    .requiredOption("--sender <senderId>", "Sender ID")
+    .option("--limit <n>", "Page size", "20")
+    .action(async (opts) => {
+      const api = await buildApi()
+      try {
+        const res = await api.get(`${agentBase(opts.sender)}${pathSuffix}`, {
+          limit: opts.limit,
+        })
+        process.stdout.write(JSON.stringify(res, null, 2) + "\n")
+      } catch (err) {
+        fail(err instanceof Error ? err.message : String(err))
+      }
+    })
+
+  sub
+    .command(`get <${idArg}>`)
+    .requiredOption("--sender <senderId>", "Sender ID")
+    .action(async (id, opts) => {
+      const api = await buildApi()
+      try {
+        const res = await api.get(`${agentBase(opts.sender)}${pathSuffix}/${id}`)
+        process.stdout.write(JSON.stringify(res, null, 2) + "\n")
+      } catch (err) {
+        fail(err instanceof Error ? err.message : String(err))
+      }
+    })
+
+  if (ops.create) {
+    const create = sub
+      .command("create")
+      .requiredOption("--sender <senderId>", "Sender ID")
+      .option("--data <json>", "Inline JSON body")
+      .option("--file <path>", "Path to a JSON file")
+    // Simple resources get discrete flags so nobody has to hand-write JSON for
+    // a two-field body — `--data '{"name":"..."}'` is a hostile first
+    // experience, and a malformed brace only ever came back as
+    // "Invalid request body".
+    for (const f of ops.createFlags ?? []) {
+      create.option(`--${f.key} <value>`, f.description)
+    }
+    create.action(async (opts) => {
+      const body =
+        opts.data || opts.file
+          ? await loadJsonBody(opts)
+          : Object.fromEntries(
+              (ops.createFlags ?? [])
+                .filter((f) => opts[f.key] !== undefined)
+                .map((f) => [f.key, opts[f.key]])
+            )
+      const api = await buildApi()
+      try {
+        const res = await api.post(`${agentBase(opts.sender)}${pathSuffix}`, body)
+        ui.success("Created.")
+        process.stdout.write(JSON.stringify(res, null, 2) + "\n")
+      } catch (err) {
+        fail(err instanceof Error ? err.message : String(err))
+      }
+    })
+  }
+
+  if (ops.update) {
+    sub
+      .command(`update <${idArg}>`)
+      .requiredOption("--sender <senderId>", "Sender ID")
+      .option("--data <json>", "Inline JSON body")
+      .option("--file <path>", "Path to a JSON file")
+      .action(async (id, opts) => {
+        const body = await loadJsonBody(opts)
+        const api = await buildApi()
+        try {
+          const res = await api.patch(`${agentBase(opts.sender)}${pathSuffix}/${id}`, body)
+          ui.success("Updated.")
+          process.stdout.write(JSON.stringify(res, null, 2) + "\n")
+        } catch (err) {
+          fail(err instanceof Error ? err.message : String(err))
+        }
+      })
+  }
+
+  if (ops.remove) {
+    sub
+      .command(`delete <${idArg}>`)
+      .requiredOption("--sender <senderId>", "Sender ID")
+      .action(async (id, opts) => {
+        const api = await buildApi()
+        try {
+          await api.del(`${agentBase(opts.sender)}${pathSuffix}/${id}`)
+          ui.success("Deleted.")
+        } catch (err) {
+          fail(err instanceof Error ? err.message : String(err))
+        }
+      })
+  }
+
+  return sub
+}
