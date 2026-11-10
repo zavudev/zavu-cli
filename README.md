@@ -12,6 +12,7 @@ per platform (no Node or Bun runtime required on the user's machine).
 | `zavu functions deploy` | Push the local function code to Zavu (server-side bundle + activate). |
 | `zavu functions invoke` | Run the function locally with a synthetic event. Mock or live mode. |
 | `zavu functions logs --tail` | Stream invocation logs. |
+| `zavudev sandboxes` | Start, run commands in, expose and stop isolated Linux machines. |
 | `zavu messages send / list / get` | Wraps the SDK's messages resource. More API mirrors planned. |
 
 The `zavu functions` group is the dev workflow (init/deploy/invoke/logs). The

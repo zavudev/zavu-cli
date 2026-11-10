@@ -50,6 +50,7 @@ import { subAccountsCommand } from "./commands/api/subAccounts"
 import { tenDlcCommand } from "./commands/api/tenDlc"
 import { agentsCommand } from "./commands/api/agents"
 import { callsCommand } from "./commands/api/calls"
+import { sandboxesCommand } from "./commands/api/sandboxes"
 import { telegramCommand } from "./commands/api/telegram"
 import { emailDomainsCommand } from "./commands/api/emailDomains"
 import { memoryCommand } from "./commands/api/memory"
@@ -98,6 +99,7 @@ program.addCommand(invitationsCommand())
 program.addCommand(agentsCommand())
 program.addCommand(memoryCommand())
 program.addCommand(callsCommand())
+program.addCommand(sandboxesCommand())
 program.addCommand(telegramCommand())
 program.addCommand(emailDomainsCommand())
 program.addCommand(addressesCommand())

@@ -7,7 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.15.0] - 2026-11-10
+
 ### Added
+
+- `zavudev sandboxes` starts and drives isolated Linux machines, billed per
+  second. Sandboxes need a paid plan and a live API key.
+
+  `sandboxes create` starts one (`--size`, `--timeout` or `--no-timeout`,
+  `--ephemeral`, `--env KEY=value`, `--environment`, `--from` a snapshot or
+  share code, `--setup-script`, `--wait`). `list`, `get`, `stop`, `resume`,
+  `fork` and `delete` manage it.
+
+  `sandboxes exec <id> -- <command>` runs a command and exits with its exit
+  code; `--background` returns a command id to follow with `sandboxes command`.
+  `sandboxes files read|write|list|rm` moves files, `sandboxes ports expose`
+  gives a port an HTTPS URL, `sandboxes ssh` authorizes your public key, and
+  `sandboxes desktop` opens the machine's screen.
+
+  `sandboxes snapshots` saves, shares and deletes disks, and
+  `sandboxes environments` keeps named sets of variables to start with. Their
+  values are never shown back, only the last four characters.
 
 - `phone-numbers requirements --phone-number <e164>` returns the regulatory
   requirements for the exact number you are about to buy, which are the ones
