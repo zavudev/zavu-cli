@@ -19,6 +19,8 @@ interface SecretRow {
   id: string
   key: string
   valueLast4: string
+  synced?: boolean
+  /** Pre-rename name of `synced`, still returned by the API. */
   syncedToAws?: boolean
   updatedAt?: number
 }
@@ -123,10 +125,10 @@ export function functionsSecretsCommand(): Command {
         res.secrets.map((s) => ({
           key: s.key,
           value: `…${s.valueLast4}`,
-          synced: s.syncedToAws ? "yes" : "no",
+          synced: (s.synced ?? s.syncedToAws) ? "yes" : "no",
         }))
       )
-      const stale = res.secrets.filter((s) => !s.syncedToAws).length
+      const stale = res.secrets.filter((s) => !(s.synced ?? s.syncedToAws)).length
       if (stale > 0) {
         ui.hint(
           `${stale} secret${stale === 1 ? "" : "s"} not yet pushed to Lambda — run \`npx zavudev deploy\` to sync.`
